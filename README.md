@@ -52,6 +52,7 @@ pi-symphony/
 - [`docs/DEV.md`](docs/DEV.md) — local development workflow and quality bar
 - [`docs/UPSTREAM.md`](docs/UPSTREAM.md) — upstream import and adaptation notes
 - [`docs/MODULE_MAP.md`](docs/MODULE_MAP.md) — keep / adapt / replace migration map
+- [`docs/PI_RPC_CONTRACT.md`](docs/PI_RPC_CONTRACT.md) — v1 Pi worker runtime contract
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — vendored code attribution
 
 ## License

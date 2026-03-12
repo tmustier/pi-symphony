@@ -34,6 +34,7 @@ make lint         # credo + biome
 make typecheck    # TypeScript strict typecheck
 make test         # TypeScript + Elixir tests
 make check        # full local quality gate
+pnpm run spike:rpc -- --fixture examples/fixture-issue.json
 ```
 
 Language-specific commands:
