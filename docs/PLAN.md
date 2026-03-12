@@ -286,3 +286,82 @@ A good v1:
 - is understandable by an external engineer with limited context
 - has clear module boundaries between orchestration, worker runtime, tracker integration, and proof capture
 - can be extended later without rewriting the entire system
+
+## 11. Engineering setup and execution rules
+
+### 11.1 Tooling and scaffolding baseline
+
+Before deep implementation, we should establish a clean mixed-language repo baseline.
+
+Expected baseline:
+
+- reproducible tool versions (`mise` is a good fit if we keep Elixir + Node/TypeScript)
+- a single top-level developer entrypoint for common checks
+- linting / formatting / type-analysis commands documented in the repo
+- pre-commit hooks for fast local feedback
+- CI for authoritative enforcement
+
+### 11.2 Elixir quality bar
+
+Elixir does not provide strict compile-time typing in the same way as Rust or TypeScript, but we can still push type discipline hard.
+
+Planned quality stack:
+
+- `mix format --check-formatted`
+- `mix compile --warnings-as-errors`
+- `mix test`
+- `credo --strict`
+- `dialyzer`
+- comprehensive `@spec` annotations and meaningful types for public module boundaries
+
+If we include Phoenix for the dashboard/API, we should also consider:
+
+- `sobelow` for security-oriented checks
+
+### 11.3 TypeScript quality bar
+
+For Pi extensions and any TS tooling, we should keep a strict TS baseline.
+
+Planned quality stack:
+
+- `tsc --noEmit` with strict settings
+- linting and formatting with a single opinionated toolchain
+- tests for non-trivial extension logic and protocol mapping
+
+We can choose the exact formatter/linter when scaffolding, but the goal is low-config, predictable enforcement.
+
+### 11.4 Hooks and CI
+
+Recommended approach:
+
+- fast local hooks via `lefthook` or equivalent cross-language hook runner
+- lightweight pre-commit checks on staged files
+- broader checks in CI on every push / PR
+
+Likely CI stages:
+
+1. repo setup / dependency install
+2. Elixir format + compile + lint + test + dialyzer
+3. TypeScript install + lint + typecheck + test
+4. optional security checks once the web surface exists
+
+### 11.5 Working cadence during implementation
+
+Implementation should follow these operating rules:
+
+- commit regularly at meaningful checkpoints
+- pause frequently to look for refactor opportunities
+- add meaningful test coverage as modules stabilize, not only at the end
+- prefer small integrations over long-lived parallel branches
+- when parallelizing work, assign clean boundaries, integrate quickly, then remove temporary duplication / glue
+- keep verification evidence close to the work (commands, outputs, and artifact paths)
+
+### 11.6 Ralph loop implications
+
+The Ralph loop should explicitly bake in:
+
+- early scaffolding work
+- recurring refactor / test-coverage checkpoints
+- recurring reflection points
+- explicit verification evidence after each completed milestone
+- space for parallel work only when boundaries and cleanup steps are clear
