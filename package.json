@@ -9,12 +9,14 @@
     "lint:ts": "pnpm exec biome check .",
     "typecheck": "pnpm exec tsc --noEmit",
     "test": "pnpm exec vitest run --passWithNoTests",
-    "check:ts": "pnpm run lint:ts && pnpm run typecheck && pnpm run test"
+    "check:ts": "pnpm run lint:ts && pnpm run typecheck && pnpm run test",
+    "spike:rpc": "pnpm exec tsx tools/pi-rpc-spike/cli.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.13.10",
     "lefthook": "^1.11.6",
+    "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.8"
   }

@@ -2,7 +2,12 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["extensions/**/*.test.ts", "extensions/**/*.spec.ts"],
+    include: [
+      "extensions/**/*.test.ts",
+      "extensions/**/*.spec.ts",
+      "tools/**/*.test.ts",
+      "tools/**/*.spec.ts",
+    ],
     passWithNoTests: true,
     coverage: {
       reporter: ["text", "html"],

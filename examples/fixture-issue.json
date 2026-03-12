@@ -1,0 +1,9 @@
+{
+  "id": "fixture-1",
+  "identifier": "SPIKE-1",
+  "title": "Validate Pi RPC worker flow",
+  "description": "Run a single unattended Pi worker against this fixture issue and respond with a concise acknowledgement string. Do not use tools unless absolutely necessary.",
+  "state": "In Progress",
+  "labels": ["spike", "rpc"],
+  "url": "https://example.invalid/issues/SPIKE-1"
+}

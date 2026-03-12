@@ -15,5 +15,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["extensions/**/*.ts", "vitest.config.ts"]
+  "include": ["extensions/**/*.ts", "tools/**/*.ts", "vitest.config.ts"]
 }
