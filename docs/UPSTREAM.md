@@ -38,3 +38,7 @@ When adapting upstream code:
 2. replace Codex-specific assumptions with explicit Pi worker contracts
 3. keep changes well-documented so external contributors can understand what was retained vs replaced
 4. preserve upstream attribution and licensing information
+
+## Detailed migration map
+
+For a module-by-module keep / adapt / replace breakdown, see [`docs/MODULE_MAP.md`](MODULE_MAP.md).
