@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Elixir / Phoenix
+/_build/
+/deps/
+/.elixir_ls/
+/cover/
+*.ez
+
+# Node / TypeScript
+/node_modules/
+/dist/
+/.turbo/
+/.next/
+coverage/
+*.tsbuildinfo
+
+# Local env / logs
+.env
+.env.*
+*.log
+/tmp/
+/.idea/
+/.vscode/
