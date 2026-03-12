@@ -2,14 +2,44 @@ pre-commit:
   parallel: true
   commands:
     ts-biome:
-      glob: "**/*.{ts,tsx,js,mjs,cjs,json}"
-      run: mise exec -- pnpm exec biome check --no-errors-on-unmatched {staged_files}
+      glob: "{*.{ts,tsx,js,mjs,cjs,json},**/*.{ts,tsx,js,mjs,cjs,json}}"
+      run: |
+        if command -v mise >/dev/null 2>&1; then
+          mise exec -- pnpm exec biome check --no-errors-on-unmatched {staged_files}
+        else
+          pnpm exec biome check --no-errors-on-unmatched {staged_files}
+        fi
     ts-typecheck:
-      glob: "**/*.{ts,tsx,mts,cts}"
-      run: mise exec -- pnpm typecheck
+      glob: "{*.{ts,tsx,mts,cts},**/*.{ts,tsx,mts,cts}}"
+      run: |
+        if command -v mise >/dev/null 2>&1; then
+          mise exec -- pnpm typecheck
+        else
+          pnpm typecheck
+        fi
     elixir-format:
       glob: "**/*.{ex,exs}"
-      run: cd orchestrator/elixir && mise exec -- mix format --check-formatted
+      run: |
+        if command -v mix >/dev/null 2>&1; then
+          cd orchestrator/elixir
+          if command -v mise >/dev/null 2>&1; then
+            mise exec -- mix format --check-formatted
+          else
+            mix format --check-formatted
+          fi
+        else
+          echo "Skipping elixir-format: mix not installed"
+        fi
     elixir-compile:
       glob: "**/*.{ex,exs}"
-      run: cd orchestrator/elixir && mise exec -- mix compile --warnings-as-errors
+      run: |
+        if command -v mix >/dev/null 2>&1; then
+          cd orchestrator/elixir
+          if command -v mise >/dev/null 2>&1; then
+            mise exec -- mix compile --warnings-as-errors
+          else
+            mix compile --warnings-as-errors
+          fi
+        else
+          echo "Skipping elixir-compile: mix not installed"
+        fi
