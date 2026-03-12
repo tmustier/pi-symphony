@@ -1,0 +1,15 @@
+pre-commit:
+  parallel: true
+  commands:
+    ts-biome:
+      glob: "**/*.{ts,tsx,js,mjs,cjs,json}"
+      run: mise exec -- pnpm exec biome check --no-errors-on-unmatched {staged_files}
+    ts-typecheck:
+      glob: "**/*.{ts,tsx,mts,cts}"
+      run: mise exec -- pnpm typecheck
+    elixir-format:
+      glob: "**/*.{ex,exs}"
+      run: cd orchestrator/elixir && mise exec -- mix format --check-formatted
+    elixir-compile:
+      glob: "**/*.{ex,exs}"
+      run: cd orchestrator/elixir && mise exec -- mix compile --warnings-as-errors

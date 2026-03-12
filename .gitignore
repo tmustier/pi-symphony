@@ -23,6 +23,17 @@ coverage/
 /tmp/
 /.idea/
 /.vscode/
+/.pnpm-store/
+
+# Elixir generated files
+/orchestrator/elixir/_build/
+/orchestrator/elixir/deps/
+/orchestrator/elixir/.elixir_ls/
+/orchestrator/elixir/cover/
+/orchestrator/elixir/priv/plts/
+
+# TypeScript / test artifacts
+/coverage/
 
 # Local agent loop state
 /.ralph/
