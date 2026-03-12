@@ -101,6 +101,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
+          worker_runtime: nil,
           worker_ssh_hosts: [],
           worker_max_concurrent_agents_per_host: nil,
           max_concurrent_agents: 10,
@@ -114,6 +115,11 @@ defmodule SymphonyElixir.TestSupport do
           codex_turn_timeout_ms: 3_600_000,
           codex_read_timeout_ms: 5_000,
           codex_stall_timeout_ms: 300_000,
+          pi_command: nil,
+          pi_response_timeout_ms: nil,
+          pi_session_dir_name: nil,
+          pi_disable_extensions: nil,
+          pi_disable_themes: nil,
           hook_after_create: nil,
           hook_before_run: nil,
           hook_after_run: nil,
@@ -138,6 +144,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
+    worker_runtime = Keyword.get(config, :worker_runtime)
     worker_ssh_hosts = Keyword.get(config, :worker_ssh_hosts)
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
@@ -151,6 +158,11 @@ defmodule SymphonyElixir.TestSupport do
     codex_turn_timeout_ms = Keyword.get(config, :codex_turn_timeout_ms)
     codex_read_timeout_ms = Keyword.get(config, :codex_read_timeout_ms)
     codex_stall_timeout_ms = Keyword.get(config, :codex_stall_timeout_ms)
+    pi_command = Keyword.get(config, :pi_command)
+    pi_response_timeout_ms = Keyword.get(config, :pi_response_timeout_ms)
+    pi_session_dir_name = Keyword.get(config, :pi_session_dir_name)
+    pi_disable_extensions = Keyword.get(config, :pi_disable_extensions)
+    pi_disable_themes = Keyword.get(config, :pi_disable_themes)
     hook_after_create = Keyword.get(config, :hook_after_create)
     hook_before_run = Keyword.get(config, :hook_before_run)
     hook_after_run = Keyword.get(config, :hook_after_run)
@@ -178,7 +190,7 @@ defmodule SymphonyElixir.TestSupport do
         "  interval_ms: #{yaml_value(poll_interval_ms)}",
         "workspace:",
         "  root: #{yaml_value(workspace_root)}",
-        worker_yaml(worker_ssh_hosts, worker_max_concurrent_agents_per_host),
+        worker_yaml(worker_runtime, worker_ssh_hosts, worker_max_concurrent_agents_per_host),
         "agent:",
         "  max_concurrent_agents: #{yaml_value(max_concurrent_agents)}",
         "  max_turns: #{yaml_value(max_turns)}",
@@ -192,6 +204,7 @@ defmodule SymphonyElixir.TestSupport do
         "  turn_timeout_ms: #{yaml_value(codex_turn_timeout_ms)}",
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
+        pi_yaml(pi_command, pi_response_timeout_ms, pi_session_dir_name, pi_disable_extensions, pi_disable_themes),
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
@@ -240,16 +253,33 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp worker_yaml(ssh_hosts, max_concurrent_agents_per_host)
-       when ssh_hosts in [nil, []] and is_nil(max_concurrent_agents_per_host),
+  defp worker_yaml(runtime, ssh_hosts, max_concurrent_agents_per_host)
+       when runtime in [nil, false] and ssh_hosts in [nil, []] and is_nil(max_concurrent_agents_per_host),
        do: nil
 
-  defp worker_yaml(ssh_hosts, max_concurrent_agents_per_host) do
+  defp worker_yaml(runtime, ssh_hosts, max_concurrent_agents_per_host) do
     [
       "worker:",
+      runtime not in [nil, false] && "  runtime: #{yaml_value(runtime)}",
       ssh_hosts not in [nil, []] && "  ssh_hosts: #{yaml_value(ssh_hosts)}",
       !is_nil(max_concurrent_agents_per_host) &&
         "  max_concurrent_agents_per_host: #{yaml_value(max_concurrent_agents_per_host)}"
+    ]
+    |> Enum.reject(&(&1 in [nil, false]))
+    |> Enum.join("\n")
+  end
+
+  defp pi_yaml(nil, nil, nil, nil, nil), do: nil
+
+  defp pi_yaml(command, response_timeout_ms, session_dir_name, disable_extensions, disable_themes) do
+    [
+      "pi:",
+      command && "  command: #{yaml_value(command)}",
+      response_timeout_ms && "  response_timeout_ms: #{yaml_value(response_timeout_ms)}",
+      session_dir_name && "  session_dir_name: #{yaml_value(session_dir_name)}",
+      !is_nil(disable_extensions) &&
+        "  disable_extensions: #{yaml_value(disable_extensions)}",
+      !is_nil(disable_themes) && "  disable_themes: #{yaml_value(disable_themes)}"
     ]
     |> Enum.reject(&(&1 in [nil, false]))
     |> Enum.join("\n")

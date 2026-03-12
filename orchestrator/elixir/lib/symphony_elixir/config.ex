@@ -114,6 +114,14 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @spec worker_runtime() :: :codex | :pi
+  def worker_runtime do
+    case settings!().worker.runtime do
+      "pi" -> :pi
+      _ -> :codex
+    end
+  end
+
   defp validate_semantics(settings) do
     cond do
       is_nil(settings.tracker.kind) ->
@@ -127,6 +135,9 @@ defmodule SymphonyElixir.Config do
 
       settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
         {:error, :missing_linear_project_slug}
+
+      settings.worker.runtime == "pi" and settings.worker.ssh_hosts != [] ->
+        {:error, {:invalid_workflow_config, "worker.ssh_hosts is not supported when worker.runtime is set to pi"}}
 
       true ->
         :ok

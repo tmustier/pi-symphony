@@ -107,6 +107,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     embedded_schema do
+      field(:runtime, :string, default: "codex")
       field(:ssh_hosts, {:array, :string}, default: [])
       field(:max_concurrent_agents_per_host, :integer)
     end
@@ -114,7 +115,8 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:ssh_hosts, :max_concurrent_agents_per_host], empty_values: [])
+      |> cast(attrs, [:runtime, :ssh_hosts, :max_concurrent_agents_per_host], empty_values: [])
+      |> validate_inclusion(:runtime, ["codex", "pi"])
       |> validate_number(:max_concurrent_agents_per_host, greater_than: 0)
     end
   end
@@ -199,6 +201,33 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Pi do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:command, :string, default: "pi")
+      field(:response_timeout_ms, :integer, default: 60_000)
+      field(:session_dir_name, :string, default: ".pi-rpc-sessions")
+      field(:disable_extensions, :boolean, default: true)
+      field(:disable_themes, :boolean, default: true)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(
+        attrs,
+        [:command, :response_timeout_ms, :session_dir_name, :disable_extensions, :disable_themes],
+        empty_values: []
+      )
+      |> validate_required([:command, :session_dir_name])
+      |> validate_number(:response_timeout_ms, greater_than: 0)
+    end
+  end
+
   defmodule Hooks do
     @moduledoc false
     use Ecto.Schema
@@ -268,6 +297,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:pi, Pi, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
@@ -360,6 +390,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
+    |> cast_embed(:pi, with: &Pi.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
@@ -383,7 +414,12 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    pi = %{
+      settings.pi
+      | session_dir_name: normalize_pi_session_dir_name(settings.pi.session_dir_name)
+    }
+
+    %{settings | tracker: tracker, workspace: workspace, codex: codex, pi: pi}
   end
 
   defp normalize_keys(value) when is_map(value) do
@@ -412,6 +448,26 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp drop_nil_values(value) when is_list(value), do: Enum.map(value, &drop_nil_values/1)
   defp drop_nil_values(value), do: value
+
+  defp normalize_pi_session_dir_name(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    cond do
+      trimmed == "" ->
+        ".pi-rpc-sessions"
+
+      Path.type(trimmed) == :absolute ->
+        ".pi-rpc-sessions"
+
+      String.contains?(trimmed, ["..", <<0>>]) ->
+        ".pi-rpc-sessions"
+
+      true ->
+        Path.basename(trimmed)
+    end
+  end
+
+  defp normalize_pi_session_dir_name(_value), do: ".pi-rpc-sessions"
 
   defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
 
