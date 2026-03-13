@@ -120,6 +120,23 @@ Purpose:
 - capture git metadata (branch, diff summary, commit SHA, PR URL)
 - provide structured proof back to the orchestrator
 
+### 3.6 v1 handoff model
+
+Decision for v1:
+
+- stop at a review-ready branch plus proof summary
+- do **not** open pull requests automatically yet
+
+Why:
+
+- keeps the first production surface smaller and easier to trust
+- avoids mixing GitHub write-side effects into the same milestone as worker-runtime stabilization
+- makes outsourcing easier because branch creation + proof capture is a narrower, easier-to-test contract
+
+Follow-on after v1:
+
+- add optional PR creation once branch outputs, proof artifacts, and operator review flow are stable
+
 ## 4. What we keep vs replace from Symphony Elixir
 
 ### Keep or heavily reuse
