@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Linear.Client do
   alias SymphonyElixir.{Config, Linear.Issue}
 
   @issue_page_size 50
+  @comment_page_size 20
   @max_error_body_log_bytes 1_000
 
   @issue_selection """
@@ -29,11 +30,15 @@ defmodule SymphonyElixir.Linear.Client do
             name
           }
         }
-        comments(first: 20) {
+        comments(first: #{@comment_page_size}) {
           nodes {
             id
             body
             updatedAt
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
           }
         }
         inverseRelations(first: $relationFirst) {
@@ -57,6 +62,24 @@ defmodule SymphonyElixir.Linear.Client do
   query SymphonyLinearViewer {
     viewer {
       id
+    }
+  }
+  """
+
+  @issue_comments_query """
+  query SymphonyLinearIssueComments($id: String!, $first: Int!, $after: String) {
+    issue(id: $id) {
+      comments(first: $first, after: $after) {
+        nodes {
+          id
+          body
+          updatedAt
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
     }
   }
   """
@@ -230,7 +253,7 @@ defmodule SymphonyElixir.Linear.Client do
                after: after_cursor
              })
            ),
-         {:ok, issues, page_info} <- decode_linear_page_response(body, assignee_filter) do
+         {:ok, issues, page_info} <- decode_linear_page_response(body, assignee_filter, &graphql/2) do
       updated_acc = prepend_page_issues(issues, acc_issues)
 
       case next_page_cursor(page_info) do
@@ -278,7 +301,7 @@ defmodule SymphonyElixir.Linear.Client do
            })
          ) do
       {:ok, body} ->
-        with {:ok, issues} <- decode_linear_response(body, assignee_filter) do
+        with {:ok, issues} <- decode_linear_response(body, assignee_filter, graphql_fun) do
           updated_acc = prepend_page_issues(issues, acc_issues)
           do_fetch_issue_states_page(rest_ids, scope, assignee_filter, graphql_fun, updated_acc, issue_order_index)
         end
@@ -482,20 +505,32 @@ defmodule SymphonyElixir.Linear.Client do
     )
   end
 
-  defp decode_linear_response(%{"data" => %{"issues" => %{"nodes" => nodes}}}, assignee_filter) do
-    issues =
-      nodes
-      |> Enum.map(&normalize_issue(&1, assignee_filter))
-      |> Enum.reject(&is_nil(&1))
+  defp decode_linear_response(%{"data" => %{"issues" => %{"nodes" => nodes}}}, assignee_filter, graphql_fun)
+       when is_function(graphql_fun, 2) do
+    nodes
+    |> Enum.reduce_while({:ok, []}, fn node, {:ok, issues} ->
+      case normalize_issue_with_comments(node, assignee_filter, graphql_fun) do
+        {:ok, nil} ->
+          {:cont, {:ok, issues}}
 
-    {:ok, issues}
+        {:ok, issue} ->
+          {:cont, {:ok, [issue | issues]}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, issues} -> {:ok, Enum.reverse(issues)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  defp decode_linear_response(%{"errors" => errors}, _assignee_filter) do
+  defp decode_linear_response(%{"errors" => errors}, _assignee_filter, _graphql_fun) do
     {:error, {:linear_graphql_errors, errors}}
   end
 
-  defp decode_linear_response(_unknown, _assignee_filter) do
+  defp decode_linear_response(_unknown, _assignee_filter, _graphql_fun) do
     {:error, :linear_unknown_payload}
   end
 
@@ -508,14 +543,17 @@ defmodule SymphonyElixir.Linear.Client do
              }
            }
          },
-         assignee_filter
-       ) do
-    with {:ok, issues} <- decode_linear_response(%{"data" => %{"issues" => %{"nodes" => nodes}}}, assignee_filter) do
+         assignee_filter,
+         graphql_fun
+       )
+       when is_function(graphql_fun, 2) do
+    with {:ok, issues} <- decode_linear_response(%{"data" => %{"issues" => %{"nodes" => nodes}}}, assignee_filter, graphql_fun) do
       {:ok, issues, %{has_next_page: has_next_page == true, end_cursor: end_cursor}}
     end
   end
 
-  defp decode_linear_page_response(response, assignee_filter), do: decode_linear_response(response, assignee_filter)
+  defp decode_linear_page_response(response, assignee_filter, graphql_fun),
+    do: decode_linear_response(response, assignee_filter, graphql_fun)
 
   defp next_page_cursor(%{has_next_page: true, end_cursor: end_cursor})
        when is_binary(end_cursor) and byte_size(end_cursor) > 0 do
@@ -548,6 +586,70 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp normalize_issue(_issue, _assignee_filter), do: nil
+
+  defp normalize_issue_with_comments(issue, assignee_filter, graphql_fun)
+       when is_map(issue) and is_function(graphql_fun, 2) do
+    with %Issue{} = normalized_issue <- normalize_issue(issue, assignee_filter),
+         {:ok, comments} <- fetch_all_issue_comments(normalized_issue.id, issue, graphql_fun) do
+      {:ok, %{normalized_issue | comments: comments}}
+    else
+      nil -> {:ok, nil}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fetch_all_issue_comments(issue_id, issue, graphql_fun)
+       when is_binary(issue_id) and is_map(issue) and is_function(graphql_fun, 2) do
+    initial_comments = extract_comments(issue)
+
+    case comment_page_info(issue) do
+      %{has_next_page: true, end_cursor: end_cursor} when is_binary(end_cursor) and byte_size(end_cursor) > 0 ->
+        fetch_issue_comment_pages(issue_id, end_cursor, graphql_fun, initial_comments)
+
+      %{has_next_page: true} ->
+        {:error, :linear_missing_end_cursor}
+
+      _ ->
+        {:ok, initial_comments}
+    end
+  end
+
+  defp fetch_all_issue_comments(_issue_id, issue, _graphql_fun), do: {:ok, extract_comments(issue)}
+
+  defp fetch_issue_comment_pages(issue_id, after_cursor, graphql_fun, acc_comments)
+       when is_binary(issue_id) and is_binary(after_cursor) and is_function(graphql_fun, 2) and is_list(acc_comments) do
+    variables = %{id: issue_id, first: @comment_page_size, after: after_cursor}
+
+    with {:ok, response} <- graphql_fun.(@issue_comments_query, variables),
+         {:ok, page_comments, next_cursor} <- decode_issue_comment_page(response, acc_comments) do
+      case next_cursor do
+        {:next, cursor} -> fetch_issue_comment_pages(issue_id, cursor, graphql_fun, page_comments)
+        :done -> {:ok, page_comments}
+      end
+    end
+  end
+
+  defp decode_issue_comment_page(%{"data" => %{"issue" => %{"comments" => comments_connection}}}, acc_comments)
+       when is_map(comments_connection) and is_list(acc_comments) do
+    page_comments = extract_comments(%{"comments" => comments_connection})
+    next_comments = acc_comments ++ page_comments
+
+    case next_page_cursor(comment_page_info_from_connection(comments_connection)) do
+      {:ok, next_cursor} -> {:ok, next_comments, {:next, next_cursor}}
+      :done -> {:ok, next_comments, :done}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp decode_issue_comment_page(%{"data" => %{"issue" => nil}}, acc_comments) when is_list(acc_comments) do
+    {:ok, acc_comments, :done}
+  end
+
+  defp decode_issue_comment_page(%{"errors" => errors}, _acc_comments) do
+    {:error, {:linear_graphql_errors, errors}}
+  end
+
+  defp decode_issue_comment_page(_response, _acc_comments), do: {:error, :linear_unknown_payload}
 
   defp assignee_field(%{} = assignee, field) when is_binary(field), do: assignee[field]
   defp assignee_field(_assignee, _field), do: nil
@@ -645,6 +747,18 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp extract_comments(_), do: []
+
+  defp comment_page_info(%{"comments" => comments_connection}) when is_map(comments_connection) do
+    comment_page_info_from_connection(comments_connection)
+  end
+
+  defp comment_page_info(_), do: %{has_next_page: false, end_cursor: nil}
+
+  defp comment_page_info_from_connection(%{"pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}}) do
+    %{has_next_page: has_next_page == true, end_cursor: end_cursor}
+  end
+
+  defp comment_page_info_from_connection(_), do: %{has_next_page: false, end_cursor: nil}
 
   defp extract_blockers(%{"inverseRelations" => %{"nodes" => inverse_relations}})
        when is_list(inverse_relations) do

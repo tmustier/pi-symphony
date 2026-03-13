@@ -447,6 +447,75 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert_receive {:fetch_issue_states_page, ^query, %{ids: ^second_batch_ids, first: 5, relationFirst: 50}}
   end
 
+  test "linear client paginates issue comments beyond the initial workpad window" do
+    first_page_comments =
+      Enum.map(1..20, fn index ->
+        %{
+          "id" => "comment-#{index}",
+          "body" => "Comment #{index}",
+          "updatedAt" => "2026-03-01T12:00:#{String.pad_leading(Integer.to_string(rem(index, 60)), 2, "0")}Z"
+        }
+      end)
+
+    graphql_fun = fn query, variables ->
+      cond do
+        String.contains?(query, "SymphonyLinearIssuesById") ->
+          send(self(), {:issue_state_page, variables})
+
+          {:ok,
+           %{
+             "data" => %{
+               "issues" => %{
+                 "nodes" => [
+                   %{
+                     "id" => "issue-1",
+                     "identifier" => "MT-900",
+                     "title" => "Hydrate workpad comments",
+                     "description" => "Load all comments",
+                     "state" => %{"name" => "In Review"},
+                     "labels" => %{"nodes" => []},
+                     "comments" => %{
+                       "nodes" => first_page_comments,
+                       "pageInfo" => %{"hasNextPage" => true, "endCursor" => "comments-page-2"}
+                     },
+                     "inverseRelations" => %{"nodes" => []}
+                   }
+                 ]
+               }
+             }
+           }}
+
+        String.contains?(query, "SymphonyLinearIssueComments") ->
+          send(self(), {:issue_comments_page, variables})
+
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "comments" => %{
+                   "nodes" => [
+                     %{
+                       "id" => "comment-workpad",
+                       "body" => "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n```",
+                       "updatedAt" => "2026-03-02T12:00:00Z"
+                     }
+                   ],
+                   "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+                 }
+               }
+             }
+           }}
+      end
+    end
+
+    assert {:ok, [issue]} = Client.fetch_issue_states_by_ids_for_test(["issue-1"], graphql_fun)
+
+    assert_receive {:issue_state_page, %{ids: ["issue-1"], first: 1, relationFirst: 50}}
+    assert_receive {:issue_comments_page, %{id: "issue-1", first: 20, after: "comments-page-2"}}
+    assert length(issue.comments) == 21
+    assert Enum.at(issue.comments, -1).id == "comment-workpad"
+  end
+
   test "linear client logs response bodies for non-200 graphql responses" do
     log =
       ExUnit.CaptureLog.capture_log(fn ->

@@ -525,6 +525,96 @@ defmodule SymphonyElixir.CoreTest do
     refute Process.alive?(agent_pid)
   end
 
+  test "reconcile stops running issue when orchestration phase becomes passive" do
+    issue_id = "issue-passive-reconcile"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          pid: agent_pid,
+          ref: nil,
+          identifier: "MT-561P",
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-561P",
+            state: "In Review"
+          },
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-561P",
+      state: "In Review",
+      title: "Passive phase refresh",
+      description: "Waiting for checks",
+      labels: [],
+      comments: [
+        %{
+          id: "comment-1",
+          body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+    refute Map.has_key?(updated_state.running, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    refute Process.alive?(agent_pid)
+  end
+
+  test "should not dispatch issues in passive orchestration phases" do
+    issue_id = "issue-passive-dispatch"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new(),
+      completed: MapSet.new(),
+      retry_attempts: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-561D",
+      state: "In Review",
+      title: "Passive phase dispatch",
+      description: "Waiting for checks",
+      labels: [],
+      comments: [
+        %{
+          id: "comment-1",
+          body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
   test "normal worker exit schedules active-state continuation retry" do
     issue_id = "issue-resume"
     ref = make_ref()
@@ -626,6 +716,57 @@ defmodule SymphonyElixir.CoreTest do
 
     refute Map.has_key?(state.running, issue_id)
     assert MapSet.member?(state.completed, issue_id)
+    refute MapSet.member?(state.claimed, issue_id)
+    refute Map.has_key?(state.retry_attempts, issue_id)
+  end
+
+  test "normal worker exit releases claim when the refreshed issue is missing" do
+    issue_id = "issue-missing-resume"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :MissingContinuationOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
+    end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "In Review"]
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-558M",
+      issue: %Issue{id: issue_id, identifier: "MT-558M", state: "In Review"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+    refute MapSet.member?(state.claimed, issue_id)
     refute Map.has_key?(state.retry_attempts, issue_id)
   end
 

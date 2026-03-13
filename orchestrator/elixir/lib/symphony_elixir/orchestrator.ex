@@ -821,11 +821,11 @@ defmodule SymphonyElixir.Orchestrator do
              immediate_continuation_allowed?(refreshed_issue) do
           schedule_issue_retry(state, issue_id, 1, metadata)
         else
-          state
+          release_issue_claim(state, issue_id)
         end
 
       {:ok, :missing} ->
-        state
+        release_issue_claim(state, issue_id)
 
       {:error, reason} ->
         Logger.debug("Failed to refresh issue for continuation retry issue_id=#{issue_id}: #{inspect(reason)}; preserving prior continuation behavior")

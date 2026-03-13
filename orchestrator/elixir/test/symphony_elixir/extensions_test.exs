@@ -469,7 +469,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           phase_source: "workpad",
           passive_phase: true,
           rollout_mode: "observe",
-          dispatch_allowed: true,
+          dispatch_allowed: false,
           waiting_reason: "checks_pending",
           next_intended_action: "poll_on_next_cycle",
           observed_at: DateTime.utc_now(),

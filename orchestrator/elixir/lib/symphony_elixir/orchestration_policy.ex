@@ -87,7 +87,8 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     ownership = ownership_state(issue, settings, workpad)
     kill_switch = kill_switch_state(issue, settings)
     passive_phase = workpad.phase in settings.orchestration.passive_phases
-    dispatch_allowed = ownership.allowed and not kill_switch.active
+    base_dispatch_allowed = ownership.allowed and not kill_switch.active
+    dispatch_allowed = base_dispatch_allowed and not passive_phase
 
     %{
       phase: workpad.phase,
@@ -98,7 +99,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
       waiting_reason:
         workpad.waiting_reason ||
           default_waiting_reason(passive_phase, settings.rollout.mode, ownership, kill_switch),
-      next_intended_action: next_intended_action(passive_phase, dispatch_allowed, settings.rollout.mode, ownership, kill_switch),
+      next_intended_action: next_intended_action(passive_phase, base_dispatch_allowed, dispatch_allowed, settings.rollout.mode, ownership, kill_switch),
       ownership: ownership,
       kill_switch: kill_switch,
       workpad: workpad
@@ -328,7 +329,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     end
   end
 
-  defp next_intended_action(_passive_phase, false, _rollout_mode, ownership, kill_switch) do
+  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, ownership, kill_switch) do
     cond do
       not ownership.allowed -> "await_ownership"
       kill_switch.active -> "automation_paused"
@@ -336,9 +337,9 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     end
   end
 
-  defp next_intended_action(true, true, _rollout_mode, _ownership, _kill_switch), do: "poll_on_next_cycle"
-  defp next_intended_action(false, true, "observe", _ownership, _kill_switch), do: "observe_only"
-  defp next_intended_action(false, true, _rollout_mode, _ownership, _kill_switch), do: "dispatch_worker"
+  defp next_intended_action(true, true, false, _rollout_mode, _ownership, _kill_switch), do: "poll_on_next_cycle"
+  defp next_intended_action(false, true, true, "observe", _ownership, _kill_switch), do: "observe_only"
+  defp next_intended_action(false, true, true, _rollout_mode, _ownership, _kill_switch), do: "dispatch_worker"
 
   defp default_waiting_reason(_passive_phase, _rollout_mode, _ownership, %{active: true}),
     do: "kill_switch_active"
