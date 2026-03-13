@@ -8,9 +8,9 @@ tracker:
   active_states:
     - Todo
     - In Progress
-    - Rework
-    - Human Review
+    - In Review
     - Merging
+    - Rework
   terminal_states:
     - Done
     - Closed
@@ -45,6 +45,50 @@ pi:
     - ../extensions/linear-graphql/index.ts
   disable_extensions: true
   disable_themes: true
+orchestration:
+  phase_store: workpad
+  default_phase: implementing
+  passive_phases:
+    - waiting_for_checks
+    - waiting_for_human
+    - blocked
+  max_rework_cycles: 3
+  ownership:
+    required_label: symphony
+    required_workpad_marker: "## Symphony Workpad"
+rollout:
+  mode: observe
+  preflight_required: true
+  kill_switch_label: no-symphony-automation
+  kill_switch_file: /tmp/pi-symphony.pause
+pr:
+  auto_create: true
+  base_branch: main
+  reuse_branch_pr: true
+  closed_pr_policy: new_branch
+  attach_to_tracker: true
+  required_labels:
+    - symphony
+  review_comment_mode: upsert
+  review_comment_marker: "<!-- symphony-review -->"
+review:
+  enabled: true
+  agent: pr-reviewer
+  output_format: structured_markdown_v1
+  max_passes: 2
+  fix_consideration_severities:
+    - P0
+    - P1
+    - P2
+merge:
+  mode: disabled
+  executor: land_skill
+  method: squash
+  require_green_checks: true
+  require_head_match: true
+  require_human_approval: true
+  approval_states:
+    - Merging
 hooks:
   timeout_ms: 60000
 observability:
@@ -63,6 +107,8 @@ Issue context:
 - state: {{ issue.state }}
 - url: {{ issue.url }}
 - labels: {{ issue.labels }}
+- phase: {{ issue.symphony.phase }}
+- rollout_mode: {{ policy.rollout.mode }}
 
 {% if issue.description %}
 Description:
@@ -72,11 +118,19 @@ Description:
 No description provided.
 {% endif %}
 
+Policy context:
+- ownership_allowed: {{ issue.symphony.ownership.allowed }}
+- kill_switch_active: {{ issue.symphony.kill_switch.active }}
+- passive_phase: {{ issue.symphony.passive_phase }}
+- next_action: {{ issue.symphony.next_intended_action }}
+- review_agent: {{ policy.review.agent }}
+- review_format: {{ policy.review.output_format }}
+
 Operating rules:
 1. Work only inside the provided workspace.
-2. Do not ask a human for follow-up actions unless blocked by missing auth, permissions, or required tools.
-3. Keep tracker state accurate using the available tracker bridge/tooling.
-4. Prefer small, reviewable commits on the issue branch.
-5. Final output should summarize completed work, validation run, blockers, and proof artifacts only.
+2. Respect `policy.*` and `issue.symphony.*` values as the source of orchestration policy.
+3. In observe mode, inspect and update workpad/observation state but do not mutate GitHub state.
+4. Do not ask a human for follow-up actions unless blocked by missing auth, permissions, or required tools.
+5. Final output should summarize completed work, validation run, blockers, proof artifacts, current phase, and next intended action.
 
 If this is a continuation attempt, resume from the current workspace/session state instead of restarting from scratch.

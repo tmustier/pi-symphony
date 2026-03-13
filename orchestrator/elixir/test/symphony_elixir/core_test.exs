@@ -565,6 +565,70 @@ defmodule SymphonyElixir.CoreTest do
     assert_due_in_range(due_at_ms, 500, 1_100)
   end
 
+  test "normal worker exit does not schedule immediate retry for passive orchestration phases" do
+    issue_id = "issue-passive-resume"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :PassiveContinuationOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
+    end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "In Review"],
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{
+        id: issue_id,
+        identifier: "MT-558P",
+        state: "In Review",
+        title: "Passive continuation",
+        comments: [
+          %{
+            id: "comment-1",
+            body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n```",
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+    ])
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-558P",
+      issue: %Issue{id: issue_id, identifier: "MT-558P", state: "In Review"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+    refute Map.has_key?(state.retry_attempts, issue_id)
+  end
+
   test "abnormal worker exit increments retry attempt progressively" do
     issue_id = "issue-crash"
     ref = make_ref()
@@ -795,6 +859,42 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "Ticket S-1 Refactor backend request path"
     assert prompt =~ "labels=backend"
     assert prompt =~ "attempt=3"
+  end
+
+  test "prompt builder exposes policy and derived symphony runtime fields" do
+    workflow_prompt =
+      "mode={{ policy.rollout.mode }} base={{ policy.pr.base_branch }} phase={{ issue.symphony.phase }} passive={{ issue.symphony.passive_phase }} ownership={{ issue.symphony.ownership.allowed }}"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      prompt: workflow_prompt,
+      rollout_mode: "observe",
+      pr_base_branch: "develop",
+      orchestration_required_label: "symphony"
+    )
+
+    issue = %Issue{
+      identifier: "S-2",
+      title: "Observe orchestration policy",
+      description: "Render policy values into the prompt",
+      state: "In Review",
+      url: "https://example.org/issues/S-2",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    prompt = PromptBuilder.build_prompt(issue)
+
+    assert prompt =~ "mode=observe"
+    assert prompt =~ "base=develop"
+    assert prompt =~ "phase=waiting_for_checks"
+    assert prompt =~ "passive=true"
+    assert prompt =~ "ownership=true"
   end
 
   test "prompt builder renders issue datetime fields without crashing" do
@@ -1300,6 +1400,110 @@ defmodule SymphonyElixir.CoreTest do
       refute Enum.at(turn_texts, 1) =~ "You are an agent for this repository."
       assert Enum.at(turn_texts, 1) =~ "Continuation guidance:"
       assert Enum.at(turn_texts, 1) =~ "continuation turn #2 of 3"
+    after
+      System.delete_env("SYMP_TEST_CODEx_TRACE")
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner stops immediate continuation when the refreshed issue is in a passive phase" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-passive-phase-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      template_repo = Path.join(test_root, "source")
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+
+      File.mkdir_p!(template_repo)
+      File.write!(Path.join(template_repo, "README.md"), "# test")
+      System.cmd("git", ["-C", template_repo, "init", "-b", "main"])
+      System.cmd("git", ["-C", template_repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", template_repo, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", template_repo, "add", "README.md"])
+      System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex.trace}"
+      printf 'RUN\n' >> "$trace_file"
+      count=0
+
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\n' "$line" >> "$trace_file"
+        case "$count" in
+          1)
+            printf '%s\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-passive"}}}'
+            ;;
+          4)
+            printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-passive-1"}}}'
+            printf '%s\n' '{"method":"turn/completed"}'
+            ;;
+          5)
+            printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-passive-2"}}}'
+            printf '%s\n' '{"method":"turn/completed"}'
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+
+      on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
+        codex_command: "#{codex_binary} app-server",
+        max_turns: 3,
+        orchestration_required_workpad_marker: "## Symphony Workpad"
+      )
+
+      state_fetcher = fn [_issue_id] ->
+        {:ok,
+         [
+           %Issue{
+             id: "issue-passive-turns",
+             identifier: "MT-249",
+             title: "Stop after passive phase",
+             description: "Waiting for checks now",
+             state: "In Review",
+             comments: [
+               %{
+                 id: "comment-1",
+                 body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n```",
+                 updated_at: DateTime.utc_now()
+               }
+             ]
+           }
+         ]}
+      end
+
+      issue = %Issue{
+        id: "issue-passive-turns",
+        identifier: "MT-249",
+        title: "Stop after passive phase",
+        description: "Waiting for checks now",
+        state: "In Review",
+        url: "https://example.org/issues/MT-249",
+        labels: []
+      }
+
+      assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: state_fetcher)
+
+      trace = File.read!(trace_file)
+      assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == 1
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")
       File.rm_rf(test_root)

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, OrchestrationPolicy, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -34,6 +34,7 @@ defmodule SymphonyElixir.Orchestrator do
       :tick_timer_ref,
       :tick_token,
       running: %{},
+      tracked: %{},
       completed: MapSet.new(),
       claimed: MapSet.new(),
       retry_attempts: %{},
@@ -132,23 +133,11 @@ defmodule SymphonyElixir.Orchestrator do
         state =
           case reason do
             :normal ->
-              Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+              Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; evaluating continuation policy")
 
               state
               |> complete_issue(issue_id)
-              |> schedule_issue_retry(
-                issue_id,
-                1,
-                Map.merge(
-                  %{
-                    identifier: running_entry.identifier,
-                    delay_type: :continuation,
-                    worker_host: Map.get(running_entry, :worker_host),
-                    workspace_path: Map.get(running_entry, :workspace_path)
-                  },
-                  retry_runtime_metadata(running_entry)
-                )
-              )
+              |> maybe_schedule_continuation_retry(issue_id, running_entry)
 
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
@@ -245,9 +234,14 @@ defmodule SymphonyElixir.Orchestrator do
     state = reconcile_running_issues(state)
 
     with :ok <- Config.validate!(),
-         {:ok, issues} <- Tracker.fetch_candidate_issues(),
-         true <- available_slots(state) > 0 do
-      choose_issues(issues, state)
+         {:ok, issues} <- Tracker.fetch_candidate_issues() do
+      state = update_tracked_issues(state, issues)
+
+      if available_slots(state) > 0 do
+        choose_issues(issues, state)
+      else
+        state
+      end
     else
       {:error, :missing_linear_api_token} ->
         Logger.error("Linear API token missing in WORKFLOW.md")
@@ -285,9 +279,6 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, reason} ->
         Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
-        state
-
-      false ->
         state
     end
   end
@@ -373,6 +364,11 @@ defmodule SymphonyElixir.Orchestrator do
 
       !issue_routable_to_worker?(issue) ->
         Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
+
+        terminate_running_issue(state, issue.id, false)
+
+      active_issue_state?(issue.state, active_states) and not dispatch_allowed_by_policy?(issue) ->
+        Logger.info("Issue failed orchestration policy gates: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
         terminate_running_issue(state, issue.id, false)
 
@@ -628,10 +624,19 @@ defmodule SymphonyElixir.Orchestrator do
        when is_binary(id) and is_binary(identifier) and is_binary(title) and is_binary(state_name) do
     issue_routable_to_worker?(issue) and
       active_issue_state?(state_name, active_states) and
-      !terminal_issue_state?(state_name, terminal_states)
+      !terminal_issue_state?(state_name, terminal_states) and
+      dispatch_allowed_by_policy?(issue)
   end
 
   defp candidate_issue?(_issue, _active_states, _terminal_states), do: false
+
+  defp dispatch_allowed_by_policy?(%Issue{} = issue) do
+    issue
+    |> OrchestrationPolicy.issue_runtime(Config.settings!())
+    |> Map.get(:dispatch_allowed, true)
+  end
+
+  defp dispatch_allowed_by_policy?(_issue), do: false
 
   defp issue_routable_to_worker?(%Issue{assigned_to_worker: assigned_to_worker})
        when is_boolean(assigned_to_worker),
@@ -796,6 +801,39 @@ defmodule SymphonyElixir.Orchestrator do
         retry_attempts: Map.delete(state.retry_attempts, issue_id)
     }
   end
+
+  defp maybe_schedule_continuation_retry(%State{} = state, issue_id, running_entry)
+       when is_binary(issue_id) and is_map(running_entry) do
+    metadata =
+      Map.merge(
+        %{
+          identifier: running_entry.identifier,
+          delay_type: :continuation,
+          worker_host: Map.get(running_entry, :worker_host),
+          workspace_path: Map.get(running_entry, :workspace_path)
+        },
+        retry_runtime_metadata(running_entry)
+      )
+
+    case refresh_issue_for_continuation(issue_id) do
+      {:ok, %Issue{} = refreshed_issue} ->
+        if retry_candidate_issue?(refreshed_issue, terminal_state_set()) and
+             immediate_continuation_allowed?(refreshed_issue) do
+          schedule_issue_retry(state, issue_id, 1, metadata)
+        else
+          state
+        end
+
+      {:ok, :missing} ->
+        state
+
+      {:error, reason} ->
+        Logger.debug("Failed to refresh issue for continuation retry issue_id=#{issue_id}: #{inspect(reason)}; preserving prior continuation behavior")
+        schedule_issue_retry(state, issue_id, 1, metadata)
+    end
+  end
+
+  defp maybe_schedule_continuation_retry(%State{} = state, _issue_id, _running_entry), do: state
 
   defp schedule_issue_retry(%State{} = state, issue_id, attempt, metadata)
        when is_binary(issue_id) and is_map(metadata) do
@@ -1222,10 +1260,16 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end)
 
+    tracked =
+      state.tracked
+      |> Map.values()
+      |> Enum.sort_by(&{&1.issue_identifier || "", &1.issue_id || ""})
+
     {:reply,
      %{
        running: running,
        retrying: retrying,
+       tracked: tracked,
        codex_totals: state.codex_totals,
        rate_limits: Map.get(state, :codex_rate_limits),
        polling: %{
@@ -1389,6 +1433,44 @@ defmodule SymphonyElixir.Orchestrator do
     candidate_issue?(issue, active_state_set(), terminal_states) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
   end
+
+  defp refresh_issue_for_continuation(issue_id) when is_binary(issue_id) do
+    case Tracker.fetch_issue_states_by_ids([issue_id]) do
+      {:ok, [%Issue{} = refreshed_issue | _]} -> {:ok, refreshed_issue}
+      {:ok, []} -> {:ok, :missing}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp immediate_continuation_allowed?(%Issue{} = issue) do
+    OrchestrationPolicy.continuation_allowed?(issue, Config.settings!())
+  end
+
+  defp immediate_continuation_allowed?(_issue), do: false
+
+  defp update_tracked_issues(%State{} = state, issues) when is_list(issues) do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+    settings = Config.settings!()
+
+    tracked =
+      issues
+      |> Enum.flat_map(fn
+        %Issue{id: issue_id} = issue when is_binary(issue_id) ->
+          [
+            issue
+            |> OrchestrationPolicy.tracked_issue(settings)
+            |> Map.put(:observed_at, observed_at)
+          ]
+
+        _ ->
+          []
+      end)
+      |> Map.new(fn tracked_issue -> {tracked_issue.issue_id, tracked_issue} end)
+
+    %{state | tracked: tracked}
+  end
+
+  defp update_tracked_issues(state, _issues), do: state
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
     available_slots(state) > 0 and state_slots_available?(issue, state.running)

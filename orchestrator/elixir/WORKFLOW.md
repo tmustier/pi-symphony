@@ -34,6 +34,21 @@ codex:
   thread_sandbox: workspace-write
   turn_sandbox_policy:
     type: workspaceWrite
+orchestration:
+  phase_store: workpad
+  default_phase: implementing
+  passive_phases:
+    - waiting_for_checks
+    - waiting_for_human
+    - blocked
+rollout:
+  mode: mutate
+pr:
+  base_branch: main
+review:
+  enabled: false
+merge:
+  mode: disabled
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`

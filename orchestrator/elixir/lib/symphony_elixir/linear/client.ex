@@ -29,6 +29,13 @@ defmodule SymphonyElixir.Linear.Client do
             name
           }
         }
+        comments(first: 20) {
+          nodes {
+            id
+            body
+            updatedAt
+          }
+        }
         inverseRelations(first: $relationFirst) {
           nodes {
             type
@@ -533,6 +540,7 @@ defmodule SymphonyElixir.Linear.Client do
       assignee_id: assignee_field(assignee, "id"),
       blocked_by: extract_blockers(issue),
       labels: extract_labels(issue),
+      comments: extract_comments(issue),
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
       created_at: parse_datetime(issue["createdAt"]),
       updated_at: parse_datetime(issue["updatedAt"])
@@ -619,6 +627,24 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp extract_labels(_), do: []
+
+  defp extract_comments(%{"comments" => %{"nodes" => comments}}) when is_list(comments) do
+    comments
+    |> Enum.map(fn
+      %{} = comment ->
+        %{
+          id: comment["id"],
+          body: comment["body"],
+          updated_at: parse_datetime(comment["updatedAt"])
+        }
+
+      _ ->
+        nil
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp extract_comments(_), do: []
 
   defp extract_blockers(%{"inverseRelations" => %{"nodes" => inverse_relations}})
        when is_list(inverse_relations) do

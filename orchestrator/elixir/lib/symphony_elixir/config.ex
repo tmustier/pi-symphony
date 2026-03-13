@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Config do
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Workflow
+  alias SymphonyElixir.{OrchestrationPolicy, Workflow}
 
   @default_prompt_template """
   You are working on a Linear issue.
@@ -83,6 +83,11 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @spec prompt_policy() :: map()
+  def prompt_policy do
+    settings_to_prompt_policy(settings!())
+  end
+
   @spec server_port() :: non_neg_integer() | nil
   def server_port do
     case Application.get_env(:symphony_elixir, :server_port_override) do
@@ -124,8 +129,13 @@ defmodule SymphonyElixir.Config do
 
   defp validate_semantics(settings) do
     with :ok <- validate_tracker_kind(settings),
-         :ok <- validate_linear_requirements(settings) do
-      validate_worker_runtime_semantics(settings)
+         :ok <- validate_linear_requirements(settings),
+         :ok <- validate_worker_runtime_semantics(settings),
+         :ok <- validate_orchestration_semantics(settings),
+         :ok <- validate_rollout_semantics(settings),
+         :ok <- validate_pr_semantics(settings),
+         :ok <- validate_review_semantics(settings) do
+      validate_merge_semantics(settings)
     end
   end
 
@@ -166,6 +176,122 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_worker_runtime_semantics(_settings), do: :ok
+
+  defp validate_orchestration_semantics(settings) do
+    orchestration = settings.orchestration
+
+    cond do
+      orchestration.default_phase not in OrchestrationPolicy.phase_values() ->
+        {:error, {:invalid_workflow_config, "orchestration.default_phase must be one of #{Enum.join(OrchestrationPolicy.phase_values(), ", ")}"}}
+
+      Enum.any?(orchestration.passive_phases, &(&1 not in OrchestrationPolicy.phase_values())) ->
+        {:error, {:invalid_workflow_config, "orchestration.passive_phases must be a subset of #{Enum.join(OrchestrationPolicy.phase_values(), ", ")}"}}
+
+      not is_integer(orchestration.max_rework_cycles) or orchestration.max_rework_cycles <= 0 ->
+        {:error, {:invalid_workflow_config, "orchestration.max_rework_cycles must be greater than 0"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_rollout_semantics(settings) do
+    rollout = settings.rollout
+    merge = settings.merge
+
+    cond do
+      rollout.mode == "observe" and merge.mode == "auto" ->
+        :ok
+
+      rollout.mode == "mutate" and merge.mode == "auto" ->
+        :ok
+
+      rollout.mode == "merge" and rollout.preflight_required != true ->
+        {:error, {:invalid_workflow_config, "rollout.preflight_required must be true when rollout.mode is set to merge"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_pr_semantics(settings) do
+    pr = settings.pr
+
+    if pr.review_comment_mode == "upsert" and not is_binary(pr.review_comment_marker) do
+      {:error, {:invalid_workflow_config, "pr.review_comment_marker is required when pr.review_comment_mode is upsert"}}
+    else
+      :ok
+    end
+  end
+
+  defp validate_review_semantics(settings) do
+    review = settings.review
+
+    cond do
+      review.enabled != true ->
+        :ok
+
+      not is_binary(review.agent) ->
+        {:error, {:invalid_workflow_config, "review.agent is required when review.enabled is true"}}
+
+      not is_binary(review.output_format) ->
+        {:error, {:invalid_workflow_config, "review.output_format is required when review.enabled is true"}}
+
+      review.output_format not in OrchestrationPolicy.review_output_formats() ->
+        {:error, {:invalid_workflow_config, "review.output_format must be one of #{Enum.join(OrchestrationPolicy.review_output_formats(), ", ")}"}}
+
+      not is_integer(review.max_passes) or review.max_passes <= 0 ->
+        {:error, {:invalid_workflow_config, "review.max_passes must be greater than 0"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_merge_semantics(settings) do
+    merge = settings.merge
+
+    cond do
+      merge.mode == "auto" and merge.require_human_approval == true and merge.approval_states == [] ->
+        {:error, {:invalid_workflow_config, "merge.approval_states must be set when merge.require_human_approval is true"}}
+
+      merge.mode == "auto" and rollout_disallows_merge?(settings.rollout.mode) ->
+        :ok
+
+      true ->
+        :ok
+    end
+  end
+
+  defp rollout_disallows_merge?(mode), do: mode in ["observe", "mutate"]
+
+  defp settings_to_prompt_policy(settings) do
+    %{
+      "orchestration" => struct_to_prompt_map(settings.orchestration),
+      "rollout" => struct_to_prompt_map(settings.rollout),
+      "pr" => struct_to_prompt_map(settings.pr),
+      "review" => struct_to_prompt_map(settings.review),
+      "merge" => struct_to_prompt_map(settings.merge)
+    }
+  end
+
+  defp struct_to_prompt_map(%_{} = struct) do
+    struct
+    |> Map.from_struct()
+    |> Enum.reject(fn {key, _value} -> key == :__meta__ end)
+    |> Map.new(fn {key, value} -> {to_string(key), prompt_value(value)} end)
+  end
+
+  defp struct_to_prompt_map(value) when is_map(value) do
+    Map.new(value, fn {key, nested_value} -> {to_string(key), prompt_value(nested_value)} end)
+  end
+
+  defp struct_to_prompt_map(_value), do: %{}
+
+  defp prompt_value(%_{} = value), do: struct_to_prompt_map(value)
+  defp prompt_value(value) when is_map(value), do: struct_to_prompt_map(value)
+  defp prompt_value(value) when is_list(value), do: Enum.map(value, &prompt_value/1)
+  defp prompt_value(value), do: value
 
   defp format_config_error(reason) do
     case reason do

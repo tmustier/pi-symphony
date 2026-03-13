@@ -556,6 +556,28 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "issue without required orchestration ownership label is not dispatch-eligible" do
+    write_workflow_file!(Workflow.workflow_file_path(), orchestration_required_label: "symphony")
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "ownership-away-1",
+      identifier: "MT-1008",
+      title: "Owned elsewhere",
+      state: "Todo",
+      labels: ["backend"]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
   test "todo issue with terminal blockers remains dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
@@ -1342,6 +1364,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.pi.thinking_level == nil
     assert config.pi.disable_extensions == true
     assert config.pi.disable_themes == true
+    assert config.orchestration.phase_store == "workpad"
+    assert config.orchestration.default_phase == "implementing"
+    assert config.orchestration.passive_phases == ["waiting_for_checks", "waiting_for_human", "blocked"]
+    assert config.orchestration.max_rework_cycles == 3
+    assert config.rollout.mode == "mutate"
+    assert config.rollout.preflight_required == false
+    assert config.pr.base_branch == "main"
+    assert config.pr.review_comment_mode == "off"
+    assert config.review.enabled == false
+    assert config.review.max_passes == 1
+    assert config.merge.mode == "disabled"
+    assert config.merge.method == "squash"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       worker_runtime: "pi",
@@ -1366,6 +1400,82 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.settings!().pi.model.provider == "openai"
     assert Config.settings!().pi.model.model_id == "gpt-5.4"
     assert Config.settings!().pi.thinking_level == "xhigh"
+  end
+
+  test "config validates orchestration policy sections" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      orchestration_default_phase: "reviewing",
+      orchestration_passive_phases: ["waiting_for_checks", "blocked"],
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      rollout_mode: "observe",
+      rollout_preflight_required: true,
+      rollout_kill_switch_label: "no-symphony-automation",
+      rollout_kill_switch_file: "tmp/symphony.pause",
+      pr_base_branch: "main",
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2,
+      review_fix_consideration_severities: ["P0", "P1", "P2"],
+      merge_mode: "auto",
+      merge_executor: "land_skill",
+      merge_approval_states: ["Merging"]
+    )
+
+    assert :ok = Config.validate!()
+    settings = Config.settings!()
+    expected_kill_switch_file = Workflow.workflow_file_path() |> Path.dirname() |> Path.join("tmp/symphony.pause") |> Path.expand()
+
+    assert settings.orchestration.default_phase == "reviewing"
+    assert settings.orchestration.passive_phases == ["waiting_for_checks", "blocked"]
+    assert settings.orchestration.ownership.required_label == "symphony"
+    assert settings.rollout.mode == "observe"
+    assert settings.rollout.kill_switch_file == expected_kill_switch_file
+    assert settings.pr.review_comment_mode == "upsert"
+    assert settings.review.agent == "pr-reviewer"
+    assert settings.review.output_format == "structured_markdown_v1"
+    assert settings.merge.executor == "land_skill"
+    assert settings.merge.approval_states == ["Merging"]
+  end
+
+  test "config rejects invalid policy combinations and unknown policy keys" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      review_enabled: true,
+      review_agent: nil,
+      review_output_format: nil
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "review.agent"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "freeform"
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "review.output_format"
+
+    workflow = """
+    ---
+    tracker:
+      kind: memory
+      project_slug: \"project\"
+    orchestration:
+      typo: true
+    ---
+    Prompt body
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
+    assert message =~ "orchestration has unknown keys"
   end
 
   test "config rejects remote ssh hosts when the Pi runtime is selected" do

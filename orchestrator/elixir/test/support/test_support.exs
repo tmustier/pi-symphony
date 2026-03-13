@@ -125,6 +125,36 @@ defmodule SymphonyElixir.TestSupport do
           pi_thinking_level: nil,
           pi_disable_extensions: nil,
           pi_disable_themes: nil,
+          orchestration_phase_store: "workpad",
+          orchestration_default_phase: "implementing",
+          orchestration_passive_phases: ["waiting_for_checks", "waiting_for_human", "blocked"],
+          orchestration_max_rework_cycles: 3,
+          orchestration_required_label: nil,
+          orchestration_required_workpad_marker: nil,
+          rollout_mode: "mutate",
+          rollout_preflight_required: false,
+          rollout_kill_switch_label: nil,
+          rollout_kill_switch_file: nil,
+          pr_auto_create: false,
+          pr_base_branch: "main",
+          pr_reuse_branch_pr: true,
+          pr_closed_pr_policy: "new_branch",
+          pr_attach_to_tracker: true,
+          pr_required_labels: [],
+          pr_review_comment_mode: "off",
+          pr_review_comment_marker: "<!-- symphony-review -->",
+          review_enabled: false,
+          review_agent: nil,
+          review_output_format: nil,
+          review_max_passes: 1,
+          review_fix_consideration_severities: [],
+          merge_mode: "disabled",
+          merge_executor: nil,
+          merge_method: "squash",
+          merge_require_green_checks: true,
+          merge_require_head_match: true,
+          merge_require_human_approval: true,
+          merge_approval_states: [],
           hook_after_create: nil,
           hook_before_run: nil,
           hook_after_run: nil,
@@ -173,6 +203,36 @@ defmodule SymphonyElixir.TestSupport do
     pi_thinking_level = Keyword.get(config, :pi_thinking_level)
     pi_disable_extensions = Keyword.get(config, :pi_disable_extensions)
     pi_disable_themes = Keyword.get(config, :pi_disable_themes)
+    orchestration_phase_store = Keyword.get(config, :orchestration_phase_store)
+    orchestration_default_phase = Keyword.get(config, :orchestration_default_phase)
+    orchestration_passive_phases = Keyword.get(config, :orchestration_passive_phases)
+    orchestration_max_rework_cycles = Keyword.get(config, :orchestration_max_rework_cycles)
+    orchestration_required_label = Keyword.get(config, :orchestration_required_label)
+    orchestration_required_workpad_marker = Keyword.get(config, :orchestration_required_workpad_marker)
+    rollout_mode = Keyword.get(config, :rollout_mode)
+    rollout_preflight_required = Keyword.get(config, :rollout_preflight_required)
+    rollout_kill_switch_label = Keyword.get(config, :rollout_kill_switch_label)
+    rollout_kill_switch_file = Keyword.get(config, :rollout_kill_switch_file)
+    pr_auto_create = Keyword.get(config, :pr_auto_create)
+    pr_base_branch = Keyword.get(config, :pr_base_branch)
+    pr_reuse_branch_pr = Keyword.get(config, :pr_reuse_branch_pr)
+    pr_closed_pr_policy = Keyword.get(config, :pr_closed_pr_policy)
+    pr_attach_to_tracker = Keyword.get(config, :pr_attach_to_tracker)
+    pr_required_labels = Keyword.get(config, :pr_required_labels)
+    pr_review_comment_mode = Keyword.get(config, :pr_review_comment_mode)
+    pr_review_comment_marker = Keyword.get(config, :pr_review_comment_marker)
+    review_enabled = Keyword.get(config, :review_enabled)
+    review_agent = Keyword.get(config, :review_agent)
+    review_output_format = Keyword.get(config, :review_output_format)
+    review_max_passes = Keyword.get(config, :review_max_passes)
+    review_fix_consideration_severities = Keyword.get(config, :review_fix_consideration_severities)
+    merge_mode = Keyword.get(config, :merge_mode)
+    merge_executor = Keyword.get(config, :merge_executor)
+    merge_method = Keyword.get(config, :merge_method)
+    merge_require_green_checks = Keyword.get(config, :merge_require_green_checks)
+    merge_require_head_match = Keyword.get(config, :merge_require_head_match)
+    merge_require_human_approval = Keyword.get(config, :merge_require_human_approval)
+    merge_approval_states = Keyword.get(config, :merge_approval_states)
     hook_after_create = Keyword.get(config, :hook_after_create)
     hook_before_run = Keyword.get(config, :hook_before_run)
     hook_after_run = Keyword.get(config, :hook_after_run)
@@ -226,6 +286,46 @@ defmodule SymphonyElixir.TestSupport do
           disable_extensions: pi_disable_extensions,
           disable_themes: pi_disable_themes
         }),
+        orchestration_yaml(%{
+          phase_store: orchestration_phase_store,
+          default_phase: orchestration_default_phase,
+          passive_phases: orchestration_passive_phases,
+          max_rework_cycles: orchestration_max_rework_cycles,
+          required_label: orchestration_required_label,
+          required_workpad_marker: orchestration_required_workpad_marker
+        }),
+        rollout_yaml(%{
+          mode: rollout_mode,
+          preflight_required: rollout_preflight_required,
+          kill_switch_label: rollout_kill_switch_label,
+          kill_switch_file: rollout_kill_switch_file
+        }),
+        pr_yaml(%{
+          auto_create: pr_auto_create,
+          base_branch: pr_base_branch,
+          reuse_branch_pr: pr_reuse_branch_pr,
+          closed_pr_policy: pr_closed_pr_policy,
+          attach_to_tracker: pr_attach_to_tracker,
+          required_labels: pr_required_labels,
+          review_comment_mode: pr_review_comment_mode,
+          review_comment_marker: pr_review_comment_marker
+        }),
+        review_yaml(%{
+          enabled: review_enabled,
+          agent: review_agent,
+          output_format: review_output_format,
+          max_passes: review_max_passes,
+          fix_consideration_severities: review_fix_consideration_severities
+        }),
+        merge_yaml(%{
+          mode: merge_mode,
+          executor: merge_executor,
+          method: merge_method,
+          require_green_checks: merge_require_green_checks,
+          require_head_match: merge_require_head_match,
+          require_human_approval: merge_require_human_approval,
+          approval_states: merge_approval_states
+        }),
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
@@ -258,6 +358,72 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp yaml_value(value), do: yaml_value(to_string(value))
+
+  defp orchestration_yaml(config) do
+    [
+      "orchestration:",
+      "  phase_store: #{yaml_value(config.phase_store)}",
+      "  default_phase: #{yaml_value(config.default_phase)}",
+      "  passive_phases: #{yaml_value(config.passive_phases)}",
+      "  max_rework_cycles: #{yaml_value(config.max_rework_cycles)}",
+      "  ownership:",
+      "    required_label: #{yaml_value(config.required_label)}",
+      "    required_workpad_marker: #{yaml_value(config.required_workpad_marker)}"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp rollout_yaml(config) do
+    [
+      "rollout:",
+      "  mode: #{yaml_value(config.mode)}",
+      "  preflight_required: #{yaml_value(config.preflight_required)}",
+      "  kill_switch_label: #{yaml_value(config.kill_switch_label)}",
+      "  kill_switch_file: #{yaml_value(config.kill_switch_file)}"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp pr_yaml(config) do
+    [
+      "pr:",
+      "  auto_create: #{yaml_value(config.auto_create)}",
+      "  base_branch: #{yaml_value(config.base_branch)}",
+      "  reuse_branch_pr: #{yaml_value(config.reuse_branch_pr)}",
+      "  closed_pr_policy: #{yaml_value(config.closed_pr_policy)}",
+      "  attach_to_tracker: #{yaml_value(config.attach_to_tracker)}",
+      "  required_labels: #{yaml_value(config.required_labels)}",
+      "  review_comment_mode: #{yaml_value(config.review_comment_mode)}",
+      "  review_comment_marker: #{yaml_value(config.review_comment_marker)}"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp review_yaml(config) do
+    [
+      "review:",
+      "  enabled: #{yaml_value(config.enabled)}",
+      "  agent: #{yaml_value(config.agent)}",
+      "  output_format: #{yaml_value(config.output_format)}",
+      "  max_passes: #{yaml_value(config.max_passes)}",
+      "  fix_consideration_severities: #{yaml_value(config.fix_consideration_severities)}"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp merge_yaml(config) do
+    [
+      "merge:",
+      "  mode: #{yaml_value(config.mode)}",
+      "  executor: #{yaml_value(config.executor)}",
+      "  method: #{yaml_value(config.method)}",
+      "  require_green_checks: #{yaml_value(config.require_green_checks)}",
+      "  require_head_match: #{yaml_value(config.require_head_match)}",
+      "  require_human_approval: #{yaml_value(config.require_human_approval)}",
+      "  approval_states: #{yaml_value(config.approval_states)}"
+    ]
+    |> Enum.join("\n")
+  end
 
   defp hooks_yaml(nil, nil, nil, nil, timeout_ms), do: "hooks:\n  timeout_ms: #{yaml_value(timeout_ms)}"
 
