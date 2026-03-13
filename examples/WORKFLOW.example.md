@@ -35,6 +35,10 @@ pi:
   command: pi
   response_timeout_ms: 60000
   session_dir_name: .pi-rpc-sessions
+  model:
+    provider: openai
+    model_id: gpt-5.4
+  thinking_level: xhigh
   extension_paths:
     - ../extensions/workspace-guard/index.ts
     - ../extensions/proof/index.ts

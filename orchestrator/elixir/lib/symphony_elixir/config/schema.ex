@@ -202,10 +202,31 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule PiModel do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:provider, :string)
+      field(:model_id, :string)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:provider, :model_id], empty_values: [])
+      |> validate_required([:provider, :model_id])
+    end
+  end
+
   defmodule Pi do
     @moduledoc false
     use Ecto.Schema
     import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema.PiModel
 
     @primary_key false
     embedded_schema do
@@ -215,18 +236,32 @@ defmodule SymphonyElixir.Config.Schema do
       field(:extension_paths, {:array, :string}, default: [])
       field(:disable_extensions, :boolean, default: true)
       field(:disable_themes, :boolean, default: true)
+      field(:thinking_level, :string)
+      embeds_one(:model, PiModel, on_replace: :update)
     end
+
+    @thinking_levels ["off", "minimal", "low", "medium", "high", "xhigh"]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
       |> cast(
         attrs,
-        [:command, :response_timeout_ms, :session_dir_name, :extension_paths, :disable_extensions, :disable_themes],
+        [
+          :command,
+          :response_timeout_ms,
+          :session_dir_name,
+          :extension_paths,
+          :disable_extensions,
+          :disable_themes,
+          :thinking_level
+        ],
         empty_values: []
       )
+      |> cast_embed(:model, with: &PiModel.changeset/2)
       |> validate_required([:command, :session_dir_name])
       |> validate_number(:response_timeout_ms, greater_than: 0)
+      |> validate_inclusion(:thinking_level, @thinking_levels)
     end
   end
 
@@ -419,7 +454,9 @@ defmodule SymphonyElixir.Config.Schema do
     pi = %{
       settings.pi
       | session_dir_name: normalize_pi_session_dir_name(settings.pi.session_dir_name),
-        extension_paths: normalize_pi_extension_paths(settings.pi.extension_paths)
+        extension_paths: normalize_pi_extension_paths(settings.pi.extension_paths),
+        thinking_level: normalize_pi_thinking_level(settings.pi.thinking_level),
+        model: normalize_pi_model(settings.pi.model)
     }
 
     %{settings | tracker: tracker, workspace: workspace, codex: codex, pi: pi}
@@ -499,6 +536,31 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp normalize_pi_extension_path(_path, _workflow_dir), do: nil
+
+  defp normalize_pi_model(%PiModel{} = model) do
+    provider = normalize_optional_string(model.provider)
+    model_id = normalize_optional_string(model.model_id)
+
+    if is_binary(provider) and is_binary(model_id) do
+      %{model | provider: provider, model_id: model_id}
+    else
+      nil
+    end
+  end
+
+  defp normalize_pi_model(_model), do: nil
+
+  defp normalize_pi_thinking_level(value) when is_binary(value), do: normalize_optional_string(value)
+  defp normalize_pi_thinking_level(_value), do: nil
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_optional_string(_value), do: nil
 
   defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
 

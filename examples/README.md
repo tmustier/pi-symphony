@@ -19,8 +19,9 @@ Typical flow:
    - `PI_SYMPHONY_WORKSPACE_ROOT`
 3. Set `tracker.team_key` in the copied workflow to the Linear team you want to scope to
 4. Optionally set `tracker.project_slug` / `LINEAR_PROJECT_SLUG` if you want an extra project-level boundary inside that team
-5. Adjust polling / concurrency / prompt instructions for that repo
-6. Start the orchestrator
+5. Choose the Pi worker model and thinking level under `pi.model` / `pi.thinking_level`
+6. Adjust polling / concurrency / prompt instructions for that repo
+7. Start the orchestrator
 
 ## Important path note
 

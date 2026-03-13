@@ -11,6 +11,8 @@ defmodule SymphonyElixir.Pi.RpcClient do
   @set_auto_compaction_id 4
   @prompt_id 5
   @extension_ui_response_id 6
+  @set_model_id 97
+  @set_thinking_level_id 98
   @port_line_bytes 1_048_576
 
   @type session :: %{
@@ -68,7 +70,47 @@ defmodule SymphonyElixir.Pi.RpcClient do
     with {:ok, _} <- request_response(port, @set_session_name_id, %{"type" => "set_session_name", "name" => session_name}, timeout_ms),
          {:ok, _} <- request_response(port, @set_auto_retry_id, %{"type" => "set_auto_retry", "enabled" => false}, timeout_ms),
          {:ok, _} <- request_response(port, @set_auto_compaction_id, %{"type" => "set_auto_compaction", "enabled" => false}, timeout_ms) do
-      :ok
+      case maybe_set_model(port, timeout_ms) do
+        :ok -> maybe_set_thinking_level(port, timeout_ms)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp maybe_set_model(port, timeout_ms) do
+    case Config.settings!().pi.model do
+      %{provider: provider, model_id: model_id}
+      when is_binary(provider) and is_binary(model_id) ->
+        case request_response(
+               port,
+               @set_model_id,
+               %{"type" => "set_model", "provider" => provider, "modelId" => model_id},
+               timeout_ms
+             ) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_set_thinking_level(port, timeout_ms) do
+    case Config.settings!().pi.thinking_level do
+      thinking_level when is_binary(thinking_level) ->
+        case request_response(
+               port,
+               @set_thinking_level_id,
+               %{"type" => "set_thinking_level", "level" => thinking_level},
+               timeout_ms
+             ) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        :ok
     end
   end
 

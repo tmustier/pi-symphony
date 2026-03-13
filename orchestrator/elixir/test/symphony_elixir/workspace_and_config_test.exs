@@ -1325,6 +1325,9 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       pi_response_timeout_ms: nil,
       pi_session_dir_name: nil,
       pi_extension_paths: nil,
+      pi_model_provider: nil,
+      pi_model_id: nil,
+      pi_thinking_level: nil,
       pi_disable_extensions: nil,
       pi_disable_themes: nil
     )
@@ -1335,13 +1338,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.pi.response_timeout_ms == 60_000
     assert config.pi.session_dir_name == ".pi-rpc-sessions"
     assert config.pi.extension_paths == []
+    assert config.pi.model == nil
+    assert config.pi.thinking_level == nil
     assert config.pi.disable_extensions == true
     assert config.pi.disable_themes == true
 
     write_workflow_file!(Workflow.workflow_file_path(),
       worker_runtime: "pi",
       pi_session_dir_name: "../nested/pi-sessions",
-      pi_extension_paths: ["extensions/workspace-guard/index.ts", "./extensions/proof/index.ts"]
+      pi_extension_paths: ["extensions/workspace-guard/index.ts", "./extensions/proof/index.ts"],
+      pi_model_provider: "openai",
+      pi_model_id: "gpt-5.4",
+      pi_thinking_level: "xhigh"
     )
 
     assert :ok = Config.validate!()
@@ -1354,6 +1362,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              Path.join(expected_root, "extensions/workspace-guard/index.ts"),
              Path.join(expected_root, "extensions/proof/index.ts")
            ]
+
+    assert Config.settings!().pi.model.provider == "openai"
+    assert Config.settings!().pi.model.model_id == "gpt-5.4"
+    assert Config.settings!().pi.thinking_level == "xhigh"
   end
 
   test "config rejects remote ssh hosts when the Pi runtime is selected" do

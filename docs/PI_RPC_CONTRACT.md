@@ -64,6 +64,11 @@ The worker runner does not need the full Pi RPC surface.
 - `prompt`
 - `abort`
 
+### Optional configured startup commands
+
+- `set_model`
+- `set_thinking_level`
+
 ### Required completion / proof commands
 
 - `get_last_assistant_text`
@@ -72,8 +77,6 @@ The worker runner does not need the full Pi RPC surface.
 
 ### Optional future commands
 
-- `set_model`
-- `set_thinking_level`
 - `get_messages`
 - `get_commands`
 
@@ -88,6 +91,10 @@ The worker runner does not need the full Pi RPC surface.
    - `set_auto_retry { enabled: false }`
 5. Disable Pi-managed compaction for the initial spike:
    - `set_auto_compaction { enabled: false }`
+6. If configured in `WORKFLOW.md`, set the worker model:
+   - `set_model { provider, modelId }`
+7. If configured in `WORKFLOW.md`, set the worker thinking level:
+   - `set_thinking_level { level }`
 
 Rationale:
 

@@ -209,6 +209,100 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
     end
   end
 
+  test "pi worker runner applies configured model and thinking level before prompting" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-pi-worker-model-#{System.unique_integer([:positive])}"
+      )
+
+    previous_trace = System.get_env("SYMP_TEST_PI_TRACE")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      fake_pi = Path.join(test_root, "fake-pi")
+      trace_file = Path.join(test_root, "pi.trace")
+
+      File.mkdir_p!(workspace_root)
+      System.put_env("SYMP_TEST_PI_TRACE", trace_file)
+
+      File.write!(
+        fake_pi,
+        """
+        #!/bin/sh
+        trace_file="${SYMP_TEST_PI_TRACE:-/tmp/pi.trace}"
+        count=0
+
+        while IFS= read -r line; do
+          count=$((count + 1))
+          printf 'JSON:%s\\n' "$line" >> "$trace_file"
+
+          case "$count" in
+            1)
+              printf '%s\\n' '{"type":"response","id":1,"command":"get_state","success":true,"data":{"sessionId":"pi-session","sessionFile":"/tmp/pi-session.jsonl"}}'
+              ;;
+            2)
+              printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
+              ;;
+            3)
+              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
+              ;;
+            4)
+              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
+              ;;
+            5)
+              printf '%s\\n' '{"type":"response","id":97,"command":"set_model","success":true}'
+              ;;
+            6)
+              printf '%s\\n' '{"type":"response","id":98,"command":"set_thinking_level","success":true}'
+              ;;
+            7)
+              printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
+              printf '%s\\n' '{"type":"agent_end","messages":[]}'
+              ;;
+          esac
+        done
+        """
+      )
+
+      File.chmod!(fake_pi, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_runtime: "pi",
+        pi_command: fake_pi,
+        pi_model_provider: "openai",
+        pi_model_id: "gpt-5.4",
+        pi_thinking_level: "xhigh"
+      )
+
+      issue = %Issue{
+        id: "issue-pi-model",
+        identifier: "PI-103",
+        title: "Configure model",
+        description: "Verify deterministic worker model selection",
+        state: "Done",
+        labels: []
+      }
+
+      assert :ok =
+               AgentRunner.run(
+                 issue,
+                 nil,
+                 issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
+               )
+
+      trace = File.read!(trace_file)
+      assert trace =~ ~s("id":97,"modelId":"gpt-5.4","provider":"openai","type":"set_model")
+      assert trace =~ ~s("id":98,"level":"xhigh","type":"set_thinking_level")
+      assert trace =~ ~s("id":5,"message":)
+      assert trace =~ ~s("type":"prompt")
+    after
+      restore_env("SYMP_TEST_PI_TRACE", previous_trace)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "pi worker runner reuses a session across continuation turns" do
     test_root =
       Path.join(
