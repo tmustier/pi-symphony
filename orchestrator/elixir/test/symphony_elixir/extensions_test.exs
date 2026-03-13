@@ -427,6 +427,124 @@ defmodule SymphonyElixir.ExtensionsTest do
              json_response(conn, 202)
   end
 
+  test "phoenix observability api exposes worker session and proof artifacts" do
+    snapshot = %{
+      running: [
+        %{
+          issue_id: "issue-proof",
+          identifier: "MT-PROOF",
+          state: "In Progress",
+          worker_host: nil,
+          workspace_path: "/tmp/workspaces/MT-PROOF",
+          session_id: "pi-session-turn-1",
+          session_file: "/tmp/pi-rpc/session.jsonl",
+          session_dir: "/tmp/pi-rpc",
+          proof_dir: "/tmp/pi-rpc/proof",
+          proof_events_path: "/tmp/pi-rpc/proof/events.jsonl",
+          proof_summary_path: "/tmp/pi-rpc/proof/summary.json",
+          turn_count: 2,
+          codex_app_server_pid: nil,
+          last_codex_message: "rendered",
+          last_codex_timestamp: nil,
+          last_codex_event: :notification,
+          codex_input_tokens: 4,
+          codex_output_tokens: 8,
+          codex_total_tokens: 12,
+          started_at: DateTime.utc_now()
+        }
+      ],
+      retrying: [
+        %{
+          issue_id: "issue-proof-retry",
+          identifier: "MT-PROOF-RETRY",
+          attempt: 2,
+          due_in_ms: 2_000,
+          error: "boom",
+          worker_host: nil,
+          workspace_path: "/tmp/workspaces/MT-PROOF-RETRY",
+          session_file: "/tmp/pi-rpc/retry-session.jsonl",
+          session_dir: "/tmp/pi-rpc",
+          proof_dir: "/tmp/pi-rpc/proof",
+          proof_events_path: "/tmp/pi-rpc/proof/events.jsonl",
+          proof_summary_path: "/tmp/pi-rpc/proof/summary.json"
+        }
+      ],
+      codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
+      rate_limits: %{}
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :ProofArtifactsOrchestrator)
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert state_payload["running"] == [
+             %{
+               "issue_id" => "issue-proof",
+               "issue_identifier" => "MT-PROOF",
+               "state" => "In Progress",
+               "worker_host" => nil,
+               "workspace_path" => "/tmp/workspaces/MT-PROOF",
+               "session_id" => "pi-session-turn-1",
+               "session_file" => "/tmp/pi-rpc/session.jsonl",
+               "session_dir" => "/tmp/pi-rpc",
+               "proof" => %{
+                 "dir" => "/tmp/pi-rpc/proof",
+                 "events_path" => "/tmp/pi-rpc/proof/events.jsonl",
+                 "summary_path" => "/tmp/pi-rpc/proof/summary.json"
+               },
+               "turn_count" => 2,
+               "last_event" => "notification",
+               "last_message" => "rendered",
+               "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
+               "last_event_at" => nil,
+               "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+             }
+           ]
+
+    assert state_payload["retrying"] == [
+             %{
+               "issue_id" => "issue-proof-retry",
+               "issue_identifier" => "MT-PROOF-RETRY",
+               "attempt" => 2,
+               "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
+               "error" => "boom",
+               "worker_host" => nil,
+               "workspace_path" => "/tmp/workspaces/MT-PROOF-RETRY",
+               "session_file" => "/tmp/pi-rpc/retry-session.jsonl",
+               "session_dir" => "/tmp/pi-rpc",
+               "proof" => %{
+                 "dir" => "/tmp/pi-rpc/proof",
+                 "events_path" => "/tmp/pi-rpc/proof/events.jsonl",
+                 "summary_path" => "/tmp/pi-rpc/proof/summary.json"
+               }
+             }
+           ]
+
+    issue_payload = json_response(get(build_conn(), "/api/v1/MT-PROOF"), 200)
+
+    assert issue_payload["running"] == %{
+             "worker_host" => nil,
+             "workspace_path" => "/tmp/workspaces/MT-PROOF",
+             "session_id" => "pi-session-turn-1",
+             "session_file" => "/tmp/pi-rpc/session.jsonl",
+             "session_dir" => "/tmp/pi-rpc",
+             "proof" => %{
+               "dir" => "/tmp/pi-rpc/proof",
+               "events_path" => "/tmp/pi-rpc/proof/events.jsonl",
+               "summary_path" => "/tmp/pi-rpc/proof/summary.json"
+             },
+             "turn_count" => 2,
+             "state" => "In Progress",
+             "started_at" => issue_payload["running"]["started_at"],
+             "last_event" => "notification",
+             "last_message" => "rendered",
+             "last_event_at" => nil,
+             "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+           }
+  end
+
   test "phoenix observability api preserves 405, 404, and unavailable behavior" do
     unavailable_orchestrator = Module.concat(__MODULE__, :UnavailableOrchestrator)
     start_test_endpoint(orchestrator: unavailable_orchestrator, snapshot_timeout_ms: 5)

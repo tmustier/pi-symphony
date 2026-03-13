@@ -114,6 +114,9 @@ defmodule SymphonyElixirWeb.Presenter do
         total_tokens: entry.codex_total_tokens
       }
     }
+    |> maybe_put(:session_file, Map.get(entry, :session_file))
+    |> maybe_put(:session_dir, Map.get(entry, :session_dir))
+    |> maybe_put(:proof, proof_payload(entry))
   end
 
   defp retry_entry_payload(entry) do
@@ -126,6 +129,9 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(entry, :worker_host),
       workspace_path: Map.get(entry, :workspace_path)
     }
+    |> maybe_put(:session_file, Map.get(entry, :session_file))
+    |> maybe_put(:session_dir, Map.get(entry, :session_dir))
+    |> maybe_put(:proof, proof_payload(entry))
   end
 
   defp running_issue_payload(running) do
@@ -145,6 +151,9 @@ defmodule SymphonyElixirWeb.Presenter do
         total_tokens: running.codex_total_tokens
       }
     }
+    |> maybe_put(:session_file, Map.get(running, :session_file))
+    |> maybe_put(:session_dir, Map.get(running, :session_dir))
+    |> maybe_put(:proof, proof_payload(running))
   end
 
   defp retry_issue_payload(retry) do
@@ -155,6 +164,9 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(retry, :worker_host),
       workspace_path: Map.get(retry, :workspace_path)
     }
+    |> maybe_put(:session_file, Map.get(retry, :session_file))
+    |> maybe_put(:session_dir, Map.get(retry, :session_dir))
+    |> maybe_put(:proof, proof_payload(retry))
   end
 
   defp workspace_path(issue_identifier, running, retry) do
@@ -177,6 +189,22 @@ defmodule SymphonyElixirWeb.Presenter do
     ]
     |> Enum.reject(&is_nil(&1.at))
   end
+
+  defp proof_payload(entry) when is_map(entry) do
+    %{}
+    |> maybe_put(:dir, Map.get(entry, :proof_dir))
+    |> maybe_put(:events_path, Map.get(entry, :proof_events_path))
+    |> maybe_put(:summary_path, Map.get(entry, :proof_summary_path))
+    |> case do
+      proof when map_size(proof) == 0 -> nil
+      proof -> proof
+    end
+  end
+
+  defp proof_payload(_entry), do: nil
+
+  defp maybe_put(payload, _key, nil), do: payload
+  defp maybe_put(payload, key, value), do: Map.put(payload, key, value)
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: StatusDashboard.humanize_codex_message(message)
