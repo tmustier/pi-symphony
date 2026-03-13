@@ -267,15 +267,19 @@ defmodule SymphonyElixir.Pi.RpcClient do
   defp build_command(session_dir) do
     pi = Config.settings!().pi
 
-    flags = [
-      pi.command,
-      "--mode rpc",
-      "--session-dir #{shell_escape(session_dir)}",
-      pi.disable_extensions && "--no-extensions",
-      pi.disable_themes && "--no-themes"
-    ]
-    |> Enum.reject(&(&1 in [nil, false, ""]))
-    |> Enum.join(" ")
+    flags =
+      [
+        pi.command,
+        "--mode rpc",
+        "--session-dir #{shell_escape(session_dir)}",
+        pi.disable_extensions && "--no-extensions",
+        pi.disable_themes && "--no-themes"
+      ] ++ Enum.map(pi.extension_paths, &"--extension #{shell_escape(&1)}")
+
+    flags =
+      flags
+      |> Enum.reject(&(&1 in [nil, false, ""]))
+      |> Enum.join(" ")
 
     "exec #{flags}"
   end

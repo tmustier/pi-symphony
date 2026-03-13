@@ -14,7 +14,8 @@ The goal is to replace Symphony's Codex app-server boundary with the smallest Pi
 Each issue run gets its own Pi subprocess started in **RPC mode**:
 
 ```bash
-pi --mode rpc --session-dir <issue-session-dir> --no-extensions --no-themes
+pi --mode rpc --session-dir <issue-session-dir> --no-extensions --no-themes \
+  --extension <worker-extension> --extension <worker-extension>
 ```
 
 Expected properties:
@@ -26,7 +27,8 @@ Expected properties:
 - process cwd is the issue workspace
 - each issue attempt gets an explicit session directory so proof artifacts can be exported deterministically
 - ambient user extensions are disabled so worker behavior stays deterministic
-- future required worker extensions should be passed explicitly, not discovered implicitly from the operator's machine
+- required worker extensions are passed explicitly, not discovered implicitly from the operator's machine
+- worker extension paths should resolve relative to `WORKFLOW.md` and be expanded to absolute paths before process launch
 
 The orchestrator owns process lifecycle:
 
@@ -175,7 +177,21 @@ Policy for v1:
 - record them in worker diagnostics / summary
 - otherwise ignore them operationally
 
-## 7. Minimal orchestrator-facing summary
+## 7. Worker extension bundle
+
+The initial unattended worker bundle should include:
+
+- `workspace-guard` — blocks obvious workspace escapes on `read`, `write`, `edit`, and suspicious `bash` path references
+- `proof` — writes worker-side proof artifacts next to the Pi session file when available
+
+The proof extension should emit at least:
+
+- `proof/events.jsonl` — sanitized worker-side event log
+- `proof/summary.json` — summary with final assistant text and tool/event counts
+
+The orchestrator remains responsible for higher-level proof packaging like exported HTML sessions and run summaries.
+
+## 8. Minimal orchestrator-facing summary
 
 A v1 worker attempt should produce at least:
 
@@ -193,7 +209,7 @@ A v1 worker attempt should produce at least:
 - stderr diagnostics path or inline tail
 - any extension UI methods seen
 
-## 8. Mapping to imported Symphony concepts
+## 9. Mapping to imported Symphony concepts
 
 Current Symphony modules expect Codex-shaped updates. For Pi, we should preserve the seam but change the payload shape.
 
@@ -204,7 +220,7 @@ Practical mapping:
 - `Pi.WorkerRunner` replaces the Codex session/turn runner behavior
 - `Pi.EventMapper` converts Pi RPC events into orchestrator updates and summary deltas
 
-## 9. Spike scope
+## 10. Spike scope
 
 The first spike is intentionally narrow.
 
@@ -218,7 +234,7 @@ It should prove:
 
 It does **not** need to prove full orchestrator integration yet.
 
-## 10. Open follow-ups
+## 11. Open follow-ups
 
 Questions intentionally deferred past the spike:
 

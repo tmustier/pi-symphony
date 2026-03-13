@@ -92,6 +92,98 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
     end
   end
 
+  test "pi worker runner loads explicit extension paths while discovery stays disabled" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-pi-worker-extensions-#{System.unique_integer([:positive])}"
+      )
+
+    previous_trace = System.get_env("SYMP_TEST_PI_TRACE")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      fake_pi = Path.join(test_root, "fake-pi")
+      trace_file = Path.join(test_root, "pi.trace")
+      workflow_root = Workflow.workflow_file_path() |> Path.dirname()
+      extension_dir = Path.join(workflow_root, "extensions")
+      workspace_guard = Path.join(extension_dir, "workspace-guard.ts")
+      proof = Path.join(extension_dir, "proof.ts")
+
+      File.mkdir_p!(workspace_root)
+      File.mkdir_p!(extension_dir)
+      File.write!(workspace_guard, "export default function () {}\n")
+      File.write!(proof, "export default function () {}\n")
+      System.put_env("SYMP_TEST_PI_TRACE", trace_file)
+
+      File.write!(
+        fake_pi,
+        """
+        #!/bin/sh
+        trace_file="${SYMP_TEST_PI_TRACE:-/tmp/pi.trace}"
+        printf 'ARGV:%s\\n' "$*" >> "$trace_file"
+        count=0
+
+        while IFS= read -r line; do
+          count=$((count + 1))
+          case "$count" in
+            1)
+              printf '%s\\n' '{"type":"response","id":1,"command":"get_state","success":true,"data":{"sessionId":"pi-session","sessionFile":"/tmp/pi-session.jsonl"}}'
+              ;;
+            2)
+              printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
+              ;;
+            3)
+              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
+              ;;
+            4)
+              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
+              ;;
+            5)
+              printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
+              printf '%s\\n' '{"type":"agent_end","messages":[]}'
+              ;;
+          esac
+        done
+        """
+      )
+
+      File.chmod!(fake_pi, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_runtime: "pi",
+        pi_command: fake_pi,
+        pi_extension_paths: ["extensions/workspace-guard.ts", "./extensions/proof.ts"]
+      )
+
+      issue = %Issue{
+        id: "issue-pi-extensions",
+        identifier: "PI-102",
+        title: "Load extensions",
+        description: "Verify explicit worker extension loading",
+        state: "Done",
+        labels: []
+      }
+
+      assert :ok =
+               AgentRunner.run(
+                 issue,
+                 nil,
+                 issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
+               )
+
+      trace = File.read!(trace_file)
+      assert trace =~ "--no-extensions"
+      assert trace =~ "--no-themes"
+      assert trace =~ "--extension #{workspace_guard}"
+      assert trace =~ "--extension #{proof}"
+    after
+      restore_env("SYMP_TEST_PI_TRACE", previous_trace)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "pi worker runner reuses a session across continuation turns" do
     test_root =
       Path.join(

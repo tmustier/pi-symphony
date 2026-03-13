@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.PathSafety
+  alias SymphonyElixir.{PathSafety, Workflow}
 
   @primary_key false
 
@@ -211,6 +211,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:command, :string, default: "pi")
       field(:response_timeout_ms, :integer, default: 60_000)
       field(:session_dir_name, :string, default: ".pi-rpc-sessions")
+      field(:extension_paths, {:array, :string}, default: [])
       field(:disable_extensions, :boolean, default: true)
       field(:disable_themes, :boolean, default: true)
     end
@@ -220,7 +221,7 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:command, :response_timeout_ms, :session_dir_name, :disable_extensions, :disable_themes],
+        [:command, :response_timeout_ms, :session_dir_name, :extension_paths, :disable_extensions, :disable_themes],
         empty_values: []
       )
       |> validate_required([:command, :session_dir_name])
@@ -416,7 +417,8 @@ defmodule SymphonyElixir.Config.Schema do
 
     pi = %{
       settings.pi
-      | session_dir_name: normalize_pi_session_dir_name(settings.pi.session_dir_name)
+      | session_dir_name: normalize_pi_session_dir_name(settings.pi.session_dir_name),
+        extension_paths: normalize_pi_extension_paths(settings.pi.extension_paths)
     }
 
     %{settings | tracker: tracker, workspace: workspace, codex: codex, pi: pi}
@@ -468,6 +470,34 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp normalize_pi_session_dir_name(_value), do: ".pi-rpc-sessions"
+
+  defp normalize_pi_extension_paths(paths) when is_list(paths) do
+    workflow_dir = Workflow.workflow_file_path() |> Path.dirname() |> Path.expand()
+
+    paths
+    |> Enum.map(&normalize_pi_extension_path(&1, workflow_dir))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_pi_extension_paths(_paths), do: []
+
+  defp normalize_pi_extension_path(path, workflow_dir) when is_binary(path) do
+    trimmed = String.trim(path)
+
+    cond do
+      trimmed == "" ->
+        nil
+
+      String.contains?(trimmed, <<0>>) ->
+        nil
+
+      true ->
+        Path.expand(trimmed, workflow_dir)
+    end
+  end
+
+  defp normalize_pi_extension_path(_path, _workflow_dir), do: nil
 
   defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
 

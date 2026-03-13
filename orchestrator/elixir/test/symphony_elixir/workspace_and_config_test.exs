@@ -1306,6 +1306,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       pi_command: nil,
       pi_response_timeout_ms: nil,
       pi_session_dir_name: nil,
+      pi_extension_paths: nil,
       pi_disable_extensions: nil,
       pi_disable_themes: nil
     )
@@ -1315,17 +1316,26 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.pi.command == "pi"
     assert config.pi.response_timeout_ms == 60_000
     assert config.pi.session_dir_name == ".pi-rpc-sessions"
+    assert config.pi.extension_paths == []
     assert config.pi.disable_extensions == true
     assert config.pi.disable_themes == true
 
     write_workflow_file!(Workflow.workflow_file_path(),
       worker_runtime: "pi",
-      pi_session_dir_name: "../nested/pi-sessions"
+      pi_session_dir_name: "../nested/pi-sessions",
+      pi_extension_paths: ["extensions/workspace-guard/index.ts", "./extensions/proof/index.ts"]
     )
 
     assert :ok = Config.validate!()
     assert Config.settings!().worker.runtime == "pi"
     assert Config.settings!().pi.session_dir_name == "pi-sessions"
+
+    expected_root = Workflow.workflow_file_path() |> Path.dirname() |> Path.expand()
+
+    assert Config.settings!().pi.extension_paths == [
+             Path.join(expected_root, "extensions/workspace-guard/index.ts"),
+             Path.join(expected_root, "extensions/proof/index.ts")
+           ]
   end
 
   test "config rejects remote ssh hosts when the Pi runtime is selected" do
