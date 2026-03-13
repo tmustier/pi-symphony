@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.Pi.WorkerRunner
+  alias SymphonyElixir.Pi.{Proof, WorkerRunner}
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
   @type worker_host :: String.t() | nil
@@ -77,21 +77,36 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_codex_update(_recipient, _issue, _message), do: :ok
 
-  defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, worker_host, workspace)
-       when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) do
-    send(
-      recipient,
-      {:worker_runtime_info, issue_id,
-       %{
-         worker_host: worker_host,
-         workspace_path: workspace
-       }}
-    )
-
+  defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, runtime_info)
+       when is_binary(issue_id) and is_pid(recipient) and is_map(runtime_info) do
+    send(recipient, {:worker_runtime_info, issue_id, runtime_info})
     :ok
   end
 
+  defp send_worker_runtime_info(recipient, issue, worker_host, workspace)
+       when is_binary(workspace) do
+    send_worker_runtime_info(recipient, issue, %{
+      worker_host: worker_host,
+      workspace_path: workspace
+    })
+  end
+
+  defp send_worker_runtime_info(_recipient, _issue, _runtime_info), do: :ok
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+
+  defp send_worker_session_runtime_info(recipient, issue, session) when is_map(session) do
+    proof_paths = Proof.artifact_paths(Map.get(session, :workspace), Map.get(session, :session_file))
+
+    send_worker_runtime_info(recipient, issue, %{
+      session_file: Map.get(session, :session_file),
+      session_dir: Map.get(session, :session_dir),
+      proof_dir: proof_paths.proof_dir,
+      proof_events_path: proof_paths.proof_events_path,
+      proof_summary_path: proof_paths.proof_summary_path
+    })
+  end
+
+  defp send_worker_session_runtime_info(_recipient, _issue, _session), do: :ok
 
   defp run_worker_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
@@ -99,6 +114,10 @@ defmodule SymphonyElixir.AgentRunner do
     runtime_module = worker_runtime_module()
 
     with {:ok, session} <- runtime_module.start_session(workspace, worker_host: worker_host) do
+      if runtime_module == WorkerRunner do
+        send_worker_session_runtime_info(codex_update_recipient, issue, session)
+      end
+
       try do
         do_run_worker_turns(
           runtime_module,

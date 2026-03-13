@@ -136,24 +136,39 @@ defmodule SymphonyElixir.Orchestrator do
 
               state
               |> complete_issue(issue_id)
-              |> schedule_issue_retry(issue_id, 1, %{
-                identifier: running_entry.identifier,
-                delay_type: :continuation,
-                worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
-              })
+              |> schedule_issue_retry(
+                issue_id,
+                1,
+                Map.merge(
+                  %{
+                    identifier: running_entry.identifier,
+                    delay_type: :continuation,
+                    worker_host: Map.get(running_entry, :worker_host),
+                    workspace_path: Map.get(running_entry, :workspace_path)
+                  },
+                  retry_runtime_metadata(running_entry)
+                )
+              )
 
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
               next_attempt = next_retry_attempt_from_running(running_entry)
 
-              schedule_issue_retry(state, issue_id, next_attempt, %{
-                identifier: running_entry.identifier,
-                error: "agent exited: #{inspect(reason)}",
-                worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
-              })
+              schedule_issue_retry(
+                state,
+                issue_id,
+                next_attempt,
+                Map.merge(
+                  %{
+                    identifier: running_entry.identifier,
+                    error: "agent exited: #{inspect(reason)}",
+                    worker_host: Map.get(running_entry, :worker_host),
+                    workspace_path: Map.get(running_entry, :workspace_path)
+                  },
+                  retry_runtime_metadata(running_entry)
+                )
+              )
           end
 
         Logger.info("Agent task finished for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
@@ -174,6 +189,11 @@ defmodule SymphonyElixir.Orchestrator do
           running_entry
           |> maybe_put_runtime_value(:worker_host, runtime_info[:worker_host])
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
+          |> maybe_put_runtime_value(:session_file, runtime_info[:session_file])
+          |> maybe_put_runtime_value(:session_dir, runtime_info[:session_dir])
+          |> maybe_put_runtime_value(:proof_dir, runtime_info[:proof_dir])
+          |> maybe_put_runtime_value(:proof_events_path, runtime_info[:proof_events_path])
+          |> maybe_put_runtime_value(:proof_summary_path, runtime_info[:proof_summary_path])
 
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
@@ -477,10 +497,17 @@ defmodule SymphonyElixir.Orchestrator do
 
       state
       |> terminate_running_issue(issue_id, false)
-      |> schedule_issue_retry(issue_id, next_attempt, %{
-        identifier: identifier,
-        error: "stalled for #{elapsed_ms}ms without codex activity"
-      })
+      |> schedule_issue_retry(
+        issue_id,
+        next_attempt,
+        Map.merge(
+          %{
+            identifier: identifier,
+            error: "stalled for #{elapsed_ms}ms without codex activity"
+          },
+          retry_runtime_metadata(running_entry)
+        )
+      )
     else
       state
     end
@@ -782,6 +809,11 @@ defmodule SymphonyElixir.Orchestrator do
     error = pick_retry_error(previous_retry, metadata)
     worker_host = pick_retry_worker_host(previous_retry, metadata)
     workspace_path = pick_retry_workspace_path(previous_retry, metadata)
+    session_file = pick_retry_session_file(previous_retry, metadata)
+    session_dir = pick_retry_session_dir(previous_retry, metadata)
+    proof_dir = pick_retry_proof_dir(previous_retry, metadata)
+    proof_events_path = pick_retry_proof_events_path(previous_retry, metadata)
+    proof_summary_path = pick_retry_proof_summary_path(previous_retry, metadata)
 
     if is_reference(old_timer) do
       Process.cancel_timer(old_timer)
@@ -804,7 +836,12 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: identifier,
             error: error,
             worker_host: worker_host,
-            workspace_path: workspace_path
+            workspace_path: workspace_path,
+            session_file: session_file,
+            session_dir: session_dir,
+            proof_dir: proof_dir,
+            proof_events_path: proof_events_path,
+            proof_summary_path: proof_summary_path
           })
     }
   end
@@ -816,7 +853,12 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: Map.get(retry_entry, :identifier),
           error: Map.get(retry_entry, :error),
           worker_host: Map.get(retry_entry, :worker_host),
-          workspace_path: Map.get(retry_entry, :workspace_path)
+          workspace_path: Map.get(retry_entry, :workspace_path),
+          session_file: Map.get(retry_entry, :session_file),
+          session_dir: Map.get(retry_entry, :session_dir),
+          proof_dir: Map.get(retry_entry, :proof_dir),
+          proof_events_path: Map.get(retry_entry, :proof_events_path),
+          proof_summary_path: Map.get(retry_entry, :proof_summary_path)
         }
 
         {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
@@ -963,6 +1005,38 @@ defmodule SymphonyElixir.Orchestrator do
   defp pick_retry_workspace_path(previous_retry, metadata) do
     metadata[:workspace_path] || Map.get(previous_retry, :workspace_path)
   end
+
+  defp pick_retry_session_file(previous_retry, metadata) do
+    metadata[:session_file] || Map.get(previous_retry, :session_file)
+  end
+
+  defp pick_retry_session_dir(previous_retry, metadata) do
+    metadata[:session_dir] || Map.get(previous_retry, :session_dir)
+  end
+
+  defp pick_retry_proof_dir(previous_retry, metadata) do
+    metadata[:proof_dir] || Map.get(previous_retry, :proof_dir)
+  end
+
+  defp pick_retry_proof_events_path(previous_retry, metadata) do
+    metadata[:proof_events_path] || Map.get(previous_retry, :proof_events_path)
+  end
+
+  defp pick_retry_proof_summary_path(previous_retry, metadata) do
+    metadata[:proof_summary_path] || Map.get(previous_retry, :proof_summary_path)
+  end
+
+  defp retry_runtime_metadata(running_entry) when is_map(running_entry) do
+    %{
+      session_file: Map.get(running_entry, :session_file),
+      session_dir: Map.get(running_entry, :session_dir),
+      proof_dir: Map.get(running_entry, :proof_dir),
+      proof_events_path: Map.get(running_entry, :proof_events_path),
+      proof_summary_path: Map.get(running_entry, :proof_summary_path)
+    }
+  end
+
+  defp retry_runtime_metadata(_running_entry), do: %{}
 
   defp maybe_put_runtime_value(running_entry, _key, nil), do: running_entry
 
@@ -1113,6 +1187,11 @@ defmodule SymphonyElixir.Orchestrator do
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
           session_id: metadata.session_id,
+          session_file: Map.get(metadata, :session_file),
+          session_dir: Map.get(metadata, :session_dir),
+          proof_dir: Map.get(metadata, :proof_dir),
+          proof_events_path: Map.get(metadata, :proof_events_path),
+          proof_summary_path: Map.get(metadata, :proof_summary_path),
           codex_app_server_pid: metadata.codex_app_server_pid,
           codex_input_tokens: metadata.codex_input_tokens,
           codex_output_tokens: metadata.codex_output_tokens,
@@ -1136,7 +1215,12 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: Map.get(retry, :identifier),
           error: Map.get(retry, :error),
           worker_host: Map.get(retry, :worker_host),
-          workspace_path: Map.get(retry, :workspace_path)
+          workspace_path: Map.get(retry, :workspace_path),
+          session_file: Map.get(retry, :session_file),
+          session_dir: Map.get(retry, :session_dir),
+          proof_dir: Map.get(retry, :proof_dir),
+          proof_events_path: Map.get(retry, :proof_events_path),
+          proof_summary_path: Map.get(retry, :proof_summary_path)
         }
       end)
 

@@ -101,6 +101,71 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            }
   end
 
+  test "orchestrator snapshot tracks worker runtime proof artifacts" do
+    issue_id = "issue-runtime-artifacts"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-189",
+      title: "Runtime artifacts test",
+      description: "Capture session and proof paths",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-189"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :RuntimeArtifactsOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      turn_count: 0,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:worker_runtime_info, issue_id,
+       %{
+         workspace_path: "/tmp/workspaces/MT-189",
+         session_file: "/tmp/pi-rpc/session.jsonl",
+         session_dir: "/tmp/pi-rpc",
+         proof_dir: "/tmp/pi-rpc/proof",
+         proof_events_path: "/tmp/pi-rpc/proof/events.jsonl",
+         proof_summary_path: "/tmp/pi-rpc/proof/summary.json"
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+    assert %{running: [snapshot_entry]} = snapshot
+    assert snapshot_entry.workspace_path == "/tmp/workspaces/MT-189"
+    assert snapshot_entry.session_file == "/tmp/pi-rpc/session.jsonl"
+    assert snapshot_entry.session_dir == "/tmp/pi-rpc"
+    assert snapshot_entry.proof_dir == "/tmp/pi-rpc/proof"
+    assert snapshot_entry.proof_events_path == "/tmp/pi-rpc/proof/events.jsonl"
+    assert snapshot_entry.proof_summary_path == "/tmp/pi-rpc/proof/summary.json"
+  end
+
   test "orchestrator snapshot tracks codex thread totals and app-server pid" do
     issue_id = "issue-usage-snapshot"
 
