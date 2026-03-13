@@ -80,16 +80,19 @@ defmodule SymphonyElixir.OrchestratorPiRuntimeTest do
       orchestrator_name = Module.concat(__MODULE__, :PiRuntimeOrchestrator)
       {:ok, _pid} = Orchestrator.start_link(name: orchestrator_name)
 
-      snapshot_entry = wait_for_running_entry(orchestrator_name, issue.id)
+      snapshot_entry = wait_for_running_entry(orchestrator_name, issue.id, &running_entry_ready?/1)
+
+      assert {:ok, expected_workspace} =
+               SymphonyElixir.PathSafety.canonicalize(Path.join(workspace_root, "PI-401"))
 
       assert snapshot_entry.identifier == "PI-401"
       assert snapshot_entry.session_id == "pi-orchestrator-session-turn-1"
       assert snapshot_entry.session_file == "/tmp/pi-orchestrator/session.jsonl"
-      assert snapshot_entry.session_dir == "/tmp/pi-orchestrator"
+      assert String.starts_with?(snapshot_entry.session_dir, expected_workspace <> "/.pi-rpc-sessions/")
       assert snapshot_entry.proof_dir == "/tmp/pi-orchestrator/proof"
       assert snapshot_entry.proof_events_path == "/tmp/pi-orchestrator/proof/events.jsonl"
       assert snapshot_entry.proof_summary_path == "/tmp/pi-orchestrator/proof/summary.json"
-      assert snapshot_entry.workspace_path == Path.join(workspace_root, "PI-401")
+      assert snapshot_entry.workspace_path == expected_workspace
     after
       if pid = Process.whereis(Module.concat(__MODULE__, :PiRuntimeOrchestrator)) do
         Process.exit(pid, :normal)
@@ -100,28 +103,41 @@ defmodule SymphonyElixir.OrchestratorPiRuntimeTest do
     end
   end
 
-  defp wait_for_running_entry(orchestrator_name, issue_id, attempts \\ 40)
+  defp wait_for_running_entry(orchestrator_name, issue_id, predicate, attempts \\ 40)
 
-  defp wait_for_running_entry(_orchestrator_name, issue_id, 0) do
+  defp wait_for_running_entry(_orchestrator_name, issue_id, _predicate, 0) do
     flunk("timed out waiting for running Pi worker entry for #{inspect(issue_id)}")
   end
 
-  defp wait_for_running_entry(orchestrator_name, issue_id, attempts) do
-    case Orchestrator.snapshot(orchestrator_name, 100) do
-      %{running: running} when is_list(running) ->
-        case Enum.find(running, &(&1.issue_id == issue_id)) do
-          nil ->
-            Process.sleep(50)
-            wait_for_running_entry(orchestrator_name, issue_id, attempts - 1)
-
-          entry ->
-            entry
+  defp wait_for_running_entry(orchestrator_name, issue_id, predicate, attempts)
+       when is_function(predicate, 1) do
+    case find_running_entry(orchestrator_name, issue_id) do
+      entry when is_map(entry) ->
+        if predicate.(entry) do
+          entry
+        else
+          Process.sleep(50)
+          wait_for_running_entry(orchestrator_name, issue_id, predicate, attempts - 1)
         end
 
       _ ->
         Process.sleep(50)
-        wait_for_running_entry(orchestrator_name, issue_id, attempts - 1)
+        wait_for_running_entry(orchestrator_name, issue_id, predicate, attempts - 1)
     end
+  end
+
+  defp find_running_entry(orchestrator_name, issue_id) do
+    case Orchestrator.snapshot(orchestrator_name, 100) do
+      %{running: running} when is_list(running) ->
+        Enum.find(running, &(&1.issue_id == issue_id))
+
+      _ ->
+        nil
+    end
+  end
+
+  defp running_entry_ready?(entry) when is_map(entry) do
+    is_binary(entry.session_id) and is_binary(entry.session_file) and is_binary(entry.proof_summary_path)
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)

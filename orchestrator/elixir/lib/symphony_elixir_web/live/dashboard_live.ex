@@ -270,12 +270,13 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp worker_totals(payload) do
-    payload[:worker_totals] || payload[:codex_totals] || %{
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-      seconds_running: 0
-    }
+    payload[:worker_totals] || payload[:codex_totals] ||
+      %{
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        seconds_running: 0
+      }
   end
 
   defp completed_runtime_seconds(payload) do

@@ -206,7 +206,14 @@ defmodule SymphonyElixir.TestSupport do
         "  turn_timeout_ms: #{yaml_value(codex_turn_timeout_ms)}",
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
-        pi_yaml(pi_command, pi_response_timeout_ms, pi_session_dir_name, pi_extension_paths, pi_disable_extensions, pi_disable_themes),
+        pi_yaml(
+          pi_command,
+          pi_response_timeout_ms,
+          pi_session_dir_name,
+          pi_extension_paths,
+          pi_disable_extensions,
+          pi_disable_themes
+        ),
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),

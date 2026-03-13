@@ -1328,7 +1328,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert :ok = Config.validate!()
     assert Config.settings!().worker.runtime == "pi"
-    assert Config.settings!().pi.session_dir_name == "pi-sessions"
+    assert Config.settings!().pi.session_dir_name == ".pi-rpc-sessions"
 
     expected_root = Workflow.workflow_file_path() |> Path.dirname() |> Path.expand()
 

@@ -5,8 +5,8 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.Pi.{Proof, WorkerRunner}
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.Pi.{Proof, WorkerRunner}
 
   @type worker_host :: String.t() | nil
 
@@ -83,6 +83,8 @@ defmodule SymphonyElixir.AgentRunner do
     :ok
   end
 
+  defp send_worker_runtime_info(_recipient, _issue, _runtime_info), do: :ok
+
   defp send_worker_runtime_info(recipient, issue, worker_host, workspace)
        when is_binary(workspace) do
     send_worker_runtime_info(recipient, issue, %{
@@ -90,9 +92,6 @@ defmodule SymphonyElixir.AgentRunner do
       workspace_path: workspace
     })
   end
-
-  defp send_worker_runtime_info(_recipient, _issue, _runtime_info), do: :ok
-  defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
 
   defp send_worker_session_runtime_info(recipient, issue, session) when is_map(session) do
     proof_paths = Proof.artifact_paths(Map.get(session, :workspace), Map.get(session, :session_file))
@@ -109,8 +108,14 @@ defmodule SymphonyElixir.AgentRunner do
   defp send_worker_session_runtime_info(_recipient, _issue, _session), do: :ok
 
   defp run_worker_turns(workspace, issue, worker_update_recipient, opts, worker_host) do
-    max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
-    issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
+    execution_context = %{
+      workspace: workspace,
+      worker_update_recipient: worker_update_recipient,
+      opts: opts,
+      issue_state_fetcher: Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1),
+      max_turns: Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
+    }
+
     runtime_module = worker_runtime_module()
 
     with {:ok, session} <- runtime_module.start_session(workspace, worker_host: worker_host) do
@@ -119,63 +124,57 @@ defmodule SymphonyElixir.AgentRunner do
       end
 
       try do
-        do_run_worker_turns(
-          runtime_module,
-          session,
-          workspace,
-          issue,
-          worker_update_recipient,
-          opts,
-          issue_state_fetcher,
-          1,
-          max_turns
-        )
+        do_run_worker_turns(runtime_module, session, issue, execution_context, 1)
       after
         runtime_module.stop_session(session)
       end
     end
   end
 
-  defp do_run_worker_turns(runtime_module, session, workspace, issue, worker_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
-    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
+  defp do_run_worker_turns(runtime_module, session, issue, execution_context, turn_number) do
+    max_turns = execution_context.max_turns
+    workspace = execution_context.workspace
+    prompt = build_turn_prompt(issue, execution_context.opts, turn_number, max_turns)
 
     with {:ok, turn_session} <-
            runtime_module.run_turn(
              session,
              prompt,
              issue,
-             on_message: worker_message_handler(worker_update_recipient, issue),
+             on_message: worker_message_handler(execution_context.worker_update_recipient, issue),
              turn_number: turn_number
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
-      case continue_with_issue?(issue, issue_state_fetcher) do
-        {:continue, refreshed_issue} when turn_number < max_turns ->
-          Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+      maybe_continue_after_turn(runtime_module, session, issue, execution_context, turn_number)
+    end
+  end
 
-          do_run_worker_turns(
-            runtime_module,
-            session,
-            workspace,
-            refreshed_issue,
-            worker_update_recipient,
-            opts,
-            issue_state_fetcher,
-            turn_number + 1,
-            max_turns
-          )
+  defp maybe_continue_after_turn(runtime_module, session, issue, execution_context, turn_number) do
+    max_turns = execution_context.max_turns
 
-        {:continue, refreshed_issue} ->
-          Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+    case continue_with_issue?(issue, execution_context.issue_state_fetcher) do
+      {:continue, refreshed_issue} when turn_number < max_turns ->
+        Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
 
-          :ok
+        do_run_worker_turns(
+          runtime_module,
+          session,
+          refreshed_issue,
+          execution_context,
+          turn_number + 1
+        )
 
-        {:done, _refreshed_issue} ->
-          :ok
+      {:continue, refreshed_issue} ->
+        Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+        :ok
+
+      {:done, _refreshed_issue} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

@@ -7,9 +7,12 @@ defmodule SymphonyElixir.Pi.Proof do
           proof_summary_path: Path.t() | nil
         }
 
-  @spec artifact_paths(Path.t() | nil, Path.t() | nil) :: artifact_paths()
-  def artifact_paths(workspace_path, session_file \\ nil)
+  @spec artifact_paths(Path.t() | nil) :: artifact_paths()
+  def artifact_paths(workspace_path) do
+    artifact_paths(workspace_path, nil)
+  end
 
+  @spec artifact_paths(Path.t() | nil, Path.t() | nil) :: artifact_paths()
   def artifact_paths(_workspace_path, session_file) when is_binary(session_file) do
     proof_dir = Path.join(Path.dirname(session_file), "proof")
 

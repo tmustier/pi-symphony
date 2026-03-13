@@ -203,8 +203,6 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  defp proof_payload(_entry), do: nil
-
   defp maybe_put(payload, _key, nil), do: payload
   defp maybe_put(payload, key, value), do: Map.put(payload, key, value)
 

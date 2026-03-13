@@ -51,9 +51,7 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
       {:ok, {:event, %{"type" => "agent_end"} = payload}, _next_pending_line} ->
         emit(on_message, EventMapper.rpc_event(payload, Jason.encode!(payload), turn_session_id, session.metadata))
 
-        Logger.info(
-          "Pi worker turn completed for #{issue_context(issue)} session_id=#{turn_session_id} session_file=#{inspect(session.session_file)}"
-        )
+        Logger.info("Pi worker turn completed for #{issue_context(issue)} session_id=#{turn_session_id} session_file=#{inspect(session.session_file)}")
 
         {:ok,
          %{

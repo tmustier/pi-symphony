@@ -71,7 +71,9 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
         labels: ["backend"]
       }
 
-      expected_workspace = Path.join(workspace_root, "PI-101")
+      assert {:ok, expected_workspace} =
+               SymphonyElixir.PathSafety.canonicalize(Path.join(workspace_root, "PI-101"))
+
       test_pid = self()
 
       assert :ok =
@@ -81,24 +83,25 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
                  issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
                )
 
+      assert_receive {:worker_runtime_info, "issue-pi-runtime", %{worker_host: nil, workspace_path: ^expected_workspace}},
+                     1_000
+
       assert_receive {:worker_runtime_info, "issue-pi-runtime",
                       %{
-                        worker_host: nil,
-                        workspace_path: ^expected_workspace,
                         session_file: "/tmp/pi-session.jsonl",
-                        session_dir: "/tmp",
+                        session_dir: session_dir,
                         proof_dir: "/tmp/proof",
                         proof_events_path: "/tmp/proof/events.jsonl",
                         proof_summary_path: "/tmp/proof/summary.json"
                       }},
                      1_000
 
-      assert_receive {:codex_worker_update, "issue-pi-runtime",
-                      %{event: :session_started, session_id: "pi-session-turn-1", timestamp: %DateTime{}}},
+      assert String.starts_with?(session_dir, expected_workspace <> "/.pi-rpc-sessions/")
+
+      assert_receive {:codex_worker_update, "issue-pi-runtime", %{event: :session_started, session_id: "pi-session-turn-1", timestamp: %DateTime{}}},
                      1_000
 
-      assert_receive {:codex_worker_update, "issue-pi-runtime",
-                      %{event: :turn_completed, usage: %{"input" => 12, "output" => 4, "totalTokens" => 16}}},
+      assert_receive {:codex_worker_update, "issue-pi-runtime", %{event: :turn_completed, usage: %{"input" => 12, "output" => 4, "totalTokens" => 16}}},
                      1_000
     after
       File.rm_rf(test_root)

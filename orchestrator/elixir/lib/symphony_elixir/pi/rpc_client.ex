@@ -24,7 +24,11 @@ defmodule SymphonyElixir.Pi.RpcClient do
           worker_host: String.t() | nil
         }
 
-  @type incoming_message :: {:response, map()} | {:event, map()} | {:extension_ui_request, map()} | {:malformed, String.t()}
+  @type incoming_message ::
+          {:response, map()}
+          | {:event, map()}
+          | {:extension_ui_request, map()}
+          | {:malformed, String.t()}
 
   @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def start_session(workspace, opts \\ []) do
@@ -34,7 +38,13 @@ defmodule SymphonyElixir.Pi.RpcClient do
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace),
          {:ok, session_dir} <- ensure_session_dir(expanded_workspace),
          {:ok, port} <- start_port(expanded_workspace, session_dir),
-         {:ok, response} <- request_response(port, @get_state_id, %{"type" => "get_state"}, Config.settings!().pi.response_timeout_ms),
+         {:ok, response} <-
+           request_response(
+             port,
+             @get_state_id,
+             %{"type" => "get_state"},
+             Config.settings!().pi.response_timeout_ms
+           ),
          {:ok, base_session_id, session_file} <- session_identity_from_response(response) do
       {:ok,
        %{
