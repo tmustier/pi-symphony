@@ -1299,4 +1299,43 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       File.rm_rf(test_root)
     end
   end
+
+  test "config reads Pi runtime defaults and sanitizes the session directory name" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      worker_runtime: nil,
+      pi_command: nil,
+      pi_response_timeout_ms: nil,
+      pi_session_dir_name: nil,
+      pi_disable_extensions: nil,
+      pi_disable_themes: nil
+    )
+
+    config = Config.settings!()
+    assert config.worker.runtime == "codex"
+    assert config.pi.command == "pi"
+    assert config.pi.response_timeout_ms == 60_000
+    assert config.pi.session_dir_name == ".pi-rpc-sessions"
+    assert config.pi.disable_extensions == true
+    assert config.pi.disable_themes == true
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      worker_runtime: "pi",
+      pi_session_dir_name: "../nested/pi-sessions"
+    )
+
+    assert :ok = Config.validate!()
+    assert Config.settings!().worker.runtime == "pi"
+    assert Config.settings!().pi.session_dir_name == "pi-sessions"
+  end
+
+  test "config rejects remote ssh hosts when the Pi runtime is selected" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      worker_runtime: "pi",
+      worker_ssh_hosts: ["worker-01:2200"]
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "worker.runtime"
+    assert message =~ "worker.ssh_hosts"
+  end
 end
