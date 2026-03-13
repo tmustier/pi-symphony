@@ -51,7 +51,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
               Operations Dashboard
             </h1>
             <p class="hero-copy">
-              Current state, retry pressure, token usage, and orchestration health for the active Symphony runtime.
+              Current state, retry pressure, token usage, proof visibility, and orchestration health for the active worker runtime.
             </p>
           </div>
 
@@ -93,24 +93,24 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
           <article class="metric-card">
             <p class="metric-label">Total tokens</p>
-            <p class="metric-value numeric"><%= format_int(@payload.codex_totals.total_tokens) %></p>
+            <p class="metric-value numeric"><%= format_int(worker_totals(@payload).total_tokens) %></p>
             <p class="metric-detail numeric">
-              In <%= format_int(@payload.codex_totals.input_tokens) %> / Out <%= format_int(@payload.codex_totals.output_tokens) %>
+              In <%= format_int(worker_totals(@payload).input_tokens) %> / Out <%= format_int(worker_totals(@payload).output_tokens) %>
             </p>
           </article>
 
           <article class="metric-card">
             <p class="metric-label">Runtime</p>
             <p class="metric-value numeric"><%= format_runtime_seconds(total_runtime_seconds(@payload, @now)) %></p>
-            <p class="metric-detail">Total Codex runtime across completed and active sessions.</p>
+            <p class="metric-detail">Total worker runtime across completed and active sessions.</p>
           </article>
         </section>
 
         <section class="section-card">
           <div class="section-header">
             <div>
-              <h2 class="section-title">Rate limits</h2>
-              <p class="section-copy">Latest upstream rate-limit snapshot, when available.</p>
+              <h2 class="section-title">Upstream limits</h2>
+              <p class="section-copy">Latest upstream rate-limit or credit snapshot, when available.</p>
             </div>
           </div>
 
@@ -144,7 +144,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <th>State</th>
                     <th>Session</th>
                     <th>Runtime / turns</th>
-                    <th>Codex update</th>
+                    <th>Worker update</th>
                     <th>Tokens</th>
                   </tr>
                 </thead>
@@ -176,6 +176,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         <% else %>
                           <span class="muted">n/a</span>
                         <% end %>
+
+                        <span :if={basename(entry[:session_file])} class="muted mono">
+                          <%= basename(entry[:session_file]) %>
+                        </span>
+
+                        <span :if={proof_summary_name(entry)} class="muted">
+                          proof: <%= proof_summary_name(entry) %>
+                        </span>
                       </div>
                     </td>
                     <td class="numeric"><%= format_runtime_and_turns(entry.started_at, entry.turn_count, @now) %></td>
@@ -261,8 +269,17 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
   end
 
+  defp worker_totals(payload) do
+    payload[:worker_totals] || payload[:codex_totals] || %{
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      seconds_running: 0
+    }
+  end
+
   defp completed_runtime_seconds(payload) do
-    payload.codex_totals.seconds_running || 0
+    worker_totals(payload).seconds_running || 0
   end
 
   defp total_runtime_seconds(payload, now) do
@@ -298,6 +315,20 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp runtime_seconds_from_started_at(_started_at, _now), do: 0
+
+  defp basename(path) when is_binary(path), do: Path.basename(path)
+  defp basename(_path), do: nil
+
+  defp proof_summary_name(entry) when is_map(entry) do
+    entry
+    |> Map.get(:proof)
+    |> case do
+      %{} = proof -> basename(proof[:summary_path] || proof["summary_path"])
+      _ -> nil
+    end
+  end
+
+  defp proof_summary_name(_entry), do: nil
 
   defp format_int(value) when is_integer(value) do
     value

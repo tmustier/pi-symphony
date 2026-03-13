@@ -351,6 +351,13 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "worker_host" => nil,
                  "workspace_path" => nil,
                  "session_id" => "thread-http",
+                 "session_file" => "/tmp/pi-rpc/session.jsonl",
+                 "session_dir" => "/tmp/pi-rpc",
+                 "proof" => %{
+                   "dir" => "/tmp/pi-rpc/proof",
+                   "events_path" => "/tmp/pi-rpc/proof/events.jsonl",
+                   "summary_path" => "/tmp/pi-rpc/proof/summary.json"
+                 },
                  "turn_count" => 7,
                  "last_event" => "notification",
                  "last_message" => "rendered",
@@ -367,9 +374,22 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
                  "error" => "boom",
                  "worker_host" => nil,
-                 "workspace_path" => nil
+                 "workspace_path" => nil,
+                 "session_file" => "/tmp/pi-rpc/retry-session.jsonl",
+                 "session_dir" => "/tmp/pi-rpc",
+                 "proof" => %{
+                   "dir" => "/tmp/pi-rpc/proof",
+                   "events_path" => "/tmp/pi-rpc/proof/events.jsonl",
+                   "summary_path" => "/tmp/pi-rpc/proof/summary.json"
+                 }
                }
              ],
+             "worker_totals" => %{
+               "input_tokens" => 4,
+               "output_tokens" => 8,
+               "total_tokens" => 12,
+               "seconds_running" => 42.5
+             },
              "codex_totals" => %{
                "input_tokens" => 4,
                "output_tokens" => 8,
@@ -395,6 +415,13 @@ defmodule SymphonyElixir.ExtensionsTest do
                "worker_host" => nil,
                "workspace_path" => nil,
                "session_id" => "thread-http",
+               "session_file" => "/tmp/pi-rpc/session.jsonl",
+               "session_dir" => "/tmp/pi-rpc",
+               "proof" => %{
+                 "dir" => "/tmp/pi-rpc/proof",
+                 "events_path" => "/tmp/pi-rpc/proof/events.jsonl",
+                 "summary_path" => "/tmp/pi-rpc/proof/summary.json"
+               },
                "turn_count" => 7,
                "state" => "In Progress",
                "started_at" => issue_payload["running"]["started_at"],
@@ -404,7 +431,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
              },
              "retry" => nil,
-             "logs" => %{"codex_session_logs" => []},
+             "logs" => %{"worker_session_logs" => [], "codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
              "tracked" => %{}
@@ -665,7 +692,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Live"
     assert html =~ "Offline"
     assert html =~ "Copy ID"
-    assert html =~ "Codex update"
+    assert html =~ "Worker update"
+    assert html =~ "session.jsonl"
+    assert html =~ "proof: summary.json"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
@@ -809,6 +838,11 @@ defmodule SymphonyElixir.ExtensionsTest do
           identifier: "MT-HTTP",
           state: "In Progress",
           session_id: "thread-http",
+          session_file: "/tmp/pi-rpc/session.jsonl",
+          session_dir: "/tmp/pi-rpc",
+          proof_dir: "/tmp/pi-rpc/proof",
+          proof_events_path: "/tmp/pi-rpc/proof/events.jsonl",
+          proof_summary_path: "/tmp/pi-rpc/proof/summary.json",
           turn_count: 7,
           codex_app_server_pid: nil,
           last_codex_message: "rendered",
@@ -826,7 +860,12 @@ defmodule SymphonyElixir.ExtensionsTest do
           identifier: "MT-RETRY",
           attempt: 2,
           due_in_ms: 2_000,
-          error: "boom"
+          error: "boom",
+          session_file: "/tmp/pi-rpc/retry-session.jsonl",
+          session_dir: "/tmp/pi-rpc",
+          proof_dir: "/tmp/pi-rpc/proof",
+          proof_events_path: "/tmp/pi-rpc/proof/events.jsonl",
+          proof_summary_path: "/tmp/pi-rpc/proof/summary.json"
         }
       ],
       codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
