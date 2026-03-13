@@ -615,6 +615,43 @@ defmodule SymphonyElixir.CoreTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "ambiguous workpad comments force blocked recovery state" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    issue = %Issue{
+      id: "issue-ambiguous-workpad",
+      identifier: "MT-561A",
+      state: "In Review",
+      title: "Ambiguous workpad",
+      description: "Two workpads found",
+      labels: [],
+      comments: [
+        %{
+          id: "comment-new",
+          body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n```",
+          updated_at: DateTime.utc_now()
+        },
+        %{
+          id: "comment-old",
+          body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: implementing\n```",
+          updated_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        }
+      ]
+    }
+
+    runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(issue, Config.settings!())
+
+    assert runtime.phase == "blocked"
+    assert runtime.phase_source == "recovery"
+    assert runtime.passive_phase == true
+    assert runtime.dispatch_allowed == false
+    assert runtime.waiting_reason == "metadata_recovery_required"
+    assert runtime.workpad.metadata_status == "ambiguous_workpad"
+    assert Enum.sort(runtime.workpad.matched_comment_ids) == ["comment-new", "comment-old"]
+  end
+
   test "normal worker exit schedules active-state continuation retry" do
     issue_id = "issue-resume"
     ref = make_ref()

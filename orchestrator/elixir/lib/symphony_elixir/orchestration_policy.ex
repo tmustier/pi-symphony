@@ -141,12 +141,13 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   defp workpad_state(issue, marker, settings) do
     default_phase = settings.orchestration.default_phase
 
-    case find_workpad_comment(issue, marker) do
-      nil ->
+    case matching_workpad_comments(issue, marker) do
+      [] ->
         %{
           marker: marker,
           marker_found: false,
           comment_id: nil,
+          matched_comment_ids: [],
           metadata_status: "missing_workpad",
           phase: default_phase,
           phase_source: "default",
@@ -155,7 +156,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
           observation: %{}
         }
 
-      comment ->
+      [comment] ->
         comment_id = comment_field(comment, :id)
         body = comment_field(comment, :body)
 
@@ -168,6 +169,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
               marker: marker,
               marker_found: true,
               comment_id: comment_id,
+              matched_comment_ids: [comment_id],
               metadata_status: "ok",
               phase: phase,
               phase_source: if(phase == default_phase and is_nil(symphony["phase"]), do: "default", else: "workpad"),
@@ -181,6 +183,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
               marker: marker,
               marker_found: true,
               comment_id: comment_id,
+              matched_comment_ids: [comment_id],
               metadata_status: "missing_metadata",
               phase: default_phase,
               phase_source: "default",
@@ -194,6 +197,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
               marker: marker,
               marker_found: true,
               comment_id: comment_id,
+              matched_comment_ids: [comment_id],
               metadata_status: "malformed_metadata",
               phase: "blocked",
               phase_source: "recovery",
@@ -202,6 +206,20 @@ defmodule SymphonyElixir.OrchestrationPolicy do
               observation: %{}
             }
         end
+
+      comments ->
+        %{
+          marker: marker,
+          marker_found: true,
+          comment_id: nil,
+          matched_comment_ids: Enum.map(comments, &comment_field(&1, :id)),
+          metadata_status: "ambiguous_workpad",
+          phase: "blocked",
+          phase_source: "recovery",
+          waiting_reason: "metadata_recovery_required",
+          metadata: nil,
+          observation: %{}
+        }
     end
   end
 
@@ -245,23 +263,23 @@ defmodule SymphonyElixir.OrchestrationPolicy do
 
   defp label_present?(_issue, _required_label), do: false
 
-  defp find_workpad_comment(%Issue{comments: comments}, marker) when is_list(comments) do
+  defp matching_workpad_comments(%Issue{comments: comments}, marker) when is_list(comments) do
     comments
     |> Enum.filter(fn comment ->
       body = comment_field(comment, :body)
       is_binary(body) and String.contains?(body, marker)
     end)
-    |> Enum.max_by(
+    |> Enum.sort_by(
       fn comment ->
         comment
         |> comment_field(:updated_at)
         |> normalize_comment_timestamp()
       end,
-      fn -> nil end
+      :desc
     )
   end
 
-  defp find_workpad_comment(_issue, _marker), do: nil
+  defp matching_workpad_comments(_issue, _marker), do: []
 
   defp normalize_comment_timestamp(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
 

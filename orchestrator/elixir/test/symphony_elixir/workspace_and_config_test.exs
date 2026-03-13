@@ -1531,6 +1531,15 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
     assert message =~ "review.output_format"
 
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      orchestration_passive_phases: ["waiting_for_checks"]
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "passive_phases"
+    assert message =~ "blocked"
+
     workflow = """
     ---
     tracker:

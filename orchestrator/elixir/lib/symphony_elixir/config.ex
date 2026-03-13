@@ -187,6 +187,9 @@ defmodule SymphonyElixir.Config do
       Enum.any?(orchestration.passive_phases, &(&1 not in OrchestrationPolicy.phase_values())) ->
         {:error, {:invalid_workflow_config, "orchestration.passive_phases must be a subset of #{Enum.join(OrchestrationPolicy.phase_values(), ", ")}"}}
 
+      "blocked" not in orchestration.passive_phases ->
+        {:error, {:invalid_workflow_config, "orchestration.passive_phases must include blocked to preserve conservative recovery behavior"}}
+
       not is_integer(orchestration.max_rework_cycles) or orchestration.max_rework_cycles <= 0 ->
         {:error, {:invalid_workflow_config, "orchestration.max_rework_cycles must be greater than 0"}}
 

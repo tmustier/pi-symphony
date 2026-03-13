@@ -505,6 +505,54 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert issue_payload["tracked"]["workpad"]["metadata_status"] == "ok"
   end
 
+  test "phoenix observability api preserves retry status when tracked data is also present" do
+    snapshot = %{
+      running: [],
+      retrying: [
+        %{
+          issue_id: "issue-retry-tracked",
+          identifier: "MT-RETRY-TRACKED",
+          attempt: 2,
+          due_in_ms: 1_000,
+          error: "checks still pending",
+          worker_host: nil,
+          workspace_path: nil
+        }
+      ],
+      tracked: [
+        %{
+          issue_id: "issue-retry-tracked",
+          issue_identifier: "MT-RETRY-TRACKED",
+          state: "In Review",
+          labels: ["symphony"],
+          phase: "waiting_for_checks",
+          phase_source: "workpad",
+          passive_phase: true,
+          rollout_mode: "observe",
+          dispatch_allowed: false,
+          waiting_reason: "checks_pending",
+          next_intended_action: "poll_on_next_cycle",
+          observed_at: DateTime.utc_now(),
+          ownership: %{allowed: true, label_present: true, workpad_present: true},
+          kill_switch: %{active: false, label_active: false, file_active: false},
+          workpad: %{marker_found: true, metadata_status: "ok"}
+        }
+      ],
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      rate_limits: nil
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :RetryTrackedObservabilityOrchestrator)
+    {:ok, _pid} = start_supervised({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+    start_test_endpoint(orchestrator: orchestrator_name)
+
+    conn = get(build_conn(), "/api/v1/MT-RETRY-TRACKED")
+    issue_payload = json_response(conn, 200)
+    assert issue_payload["status"] == "retrying"
+    assert issue_payload["retry"]["attempt"] == 2
+    assert issue_payload["tracked"]["phase"] == "waiting_for_checks"
+  end
+
   test "phoenix observability api exposes worker session and proof artifacts" do
     snapshot = %{
       running: [
