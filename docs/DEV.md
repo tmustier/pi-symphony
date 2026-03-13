@@ -96,6 +96,47 @@ Current CI runs separate jobs for:
 - TypeScript lint + typecheck + tests
 - Elixir format + compile + credo + dialyzer + tests
 
+## Example workflow for adopters
+
+A Pi-oriented sample workflow lives at:
+
+- `examples/WORKFLOW.example.md`
+
+Copy it into a target repo as `WORKFLOW.md`, then adjust:
+
+- tracker/project settings
+- workspace root
+- polling/concurrency
+- prompt instructions
+- relative `pi.extension_paths`
+
+## Validation / hardening when Elixir toolchain is available
+
+This environment still lacks a local `mix` toolchain, but the intended final validation path is:
+
+```bash
+make check-ts
+make check-elixir
+make check
+```
+
+Recommended order once `mix` is available:
+
+1. `make setup`
+2. `make check-ts`
+3. `make check-elixir`
+4. exercise a real `WORKFLOW.md` against the Pi runtime path
+5. only then declare the runtime fully hardened
+
+## Parallelization guidance
+
+When parallelizing work on this repo:
+
+- split by clear seams, not by shared files
+- prefer one agent per bounded surface (for example: worker extensions, presenter/dashboard, tests)
+- record the task boundary, integration plan, and cleanup steps in `.ralph/pi-symphony-v1.md`
+- merge short-lived parallel work quickly and remove temporary scaffolding immediately after integration
+
 ## Upstream baseline
 
 `orchestrator/elixir` starts as a vendored snapshot of OpenAI Symphony's Elixir implementation and will be adapted over time.
