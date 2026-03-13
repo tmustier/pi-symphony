@@ -89,7 +89,9 @@ Minimal example:
 ---
 tracker:
   kind: linear
-  project_slug: "..."
+  team_key: "TEAM"
+  # Optional extra narrowing inside the team:
+  # project_slug: "..."
 workspace:
   root: ~/code/workspaces
 hooks:
@@ -128,6 +130,9 @@ Notes:
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
+- Linear routing requires at least one scope boundary: `tracker.team_key` and/or `tracker.project_slug`.
+  - `tracker.team_key` is the recommended primary safety boundary.
+  - `tracker.project_slug` is optional extra narrowing inside that team.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the
@@ -136,6 +141,7 @@ Notes:
 ```yaml
 tracker:
   api_key: $LINEAR_API_KEY
+  team_key: THO
 workspace:
   root: $SYMPHONY_WORKSPACE_ROOT
 hooks:

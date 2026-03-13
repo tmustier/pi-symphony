@@ -16,10 +16,11 @@ Typical flow:
 1. Copy `examples/WORKFLOW.example.md` to `<repo>/WORKFLOW.md`
 2. Set required env vars:
    - `LINEAR_API_KEY`
-   - `LINEAR_PROJECT_SLUG`
    - `PI_SYMPHONY_WORKSPACE_ROOT`
-3. Adjust polling / concurrency / prompt instructions for that repo
-4. Start the orchestrator
+3. Set `tracker.team_key` in the copied workflow to the Linear team you want to scope to
+4. Optionally set `tracker.project_slug` / `LINEAR_PROJECT_SLUG` if you want an extra project-level boundary inside that team
+5. Adjust polling / concurrency / prompt instructions for that repo
+6. Start the orchestrator
 
 ## Important path note
 

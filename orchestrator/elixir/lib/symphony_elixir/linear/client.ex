@@ -9,9 +9,7 @@ defmodule SymphonyElixir.Linear.Client do
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
 
-  @query """
-  query SymphonyLinearPoll($projectSlug: String!, $stateNames: [String!]!, $first: Int!, $relationFirst: Int!, $after: String) {
-    issues(filter: {project: {slugId: {eq: $projectSlug}}, state: {name: {in: $stateNames}}}, first: $first, after: $after) {
+  @issue_selection """
       nodes {
         id
         identifier
@@ -46,53 +44,6 @@ defmodule SymphonyElixir.Linear.Client do
         createdAt
         updatedAt
       }
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-    }
-  }
-  """
-
-  @query_by_ids """
-  query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!) {
-    issues(filter: {id: {in: $ids}}, first: $first) {
-      nodes {
-        id
-        identifier
-        title
-        description
-        priority
-        state {
-          name
-        }
-        branchName
-        url
-        assignee {
-          id
-        }
-        labels {
-          nodes {
-            name
-          }
-        }
-        inverseRelations(first: $relationFirst) {
-          nodes {
-            type
-            issue {
-              id
-              identifier
-              state {
-                name
-              }
-            }
-          }
-        }
-        createdAt
-        updatedAt
-      }
-    }
-  }
   """
 
   @viewer_query """
@@ -103,21 +54,33 @@ defmodule SymphonyElixir.Linear.Client do
   }
   """
 
+  @doc false
+  @spec candidate_query_for_test(String.t() | nil, String.t() | nil) :: String.t()
+  def candidate_query_for_test(project_slug, team_key) do
+    candidate_query(scope_from_values(project_slug, team_key))
+  end
+
+  @doc false
+  @spec issue_states_query_for_test(String.t() | nil, String.t() | nil) :: String.t()
+  def issue_states_query_for_test(project_slug, team_key) do
+    issue_states_query(scope_from_values(project_slug, team_key))
+  end
+
   @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues do
     tracker = Config.settings!().tracker
-    project_slug = tracker.project_slug
+    scope = tracker_scope(tracker)
 
     cond do
       is_nil(tracker.api_key) ->
         {:error, :missing_linear_api_token}
 
-      is_nil(project_slug) ->
-        {:error, :missing_linear_project_slug}
+      scope == %{} ->
+        {:error, :missing_linear_scope}
 
       true ->
         with {:ok, assignee_filter} <- routing_assignee_filter() do
-          do_fetch_by_states(project_slug, tracker.active_states, assignee_filter)
+          do_fetch_by_states(scope, tracker.active_states, assignee_filter)
         end
     end
   end
@@ -130,17 +93,17 @@ defmodule SymphonyElixir.Linear.Client do
       {:ok, []}
     else
       tracker = Config.settings!().tracker
-      project_slug = tracker.project_slug
+      scope = tracker_scope(tracker)
 
       cond do
         is_nil(tracker.api_key) ->
           {:error, :missing_linear_api_token}
 
-        is_nil(project_slug) ->
-          {:error, :missing_linear_project_slug}
+        scope == %{} ->
+          {:error, :missing_linear_scope}
 
         true ->
-          do_fetch_by_states(project_slug, normalized_states, nil)
+          do_fetch_by_states(scope, normalized_states, nil)
       end
     end
   end
@@ -154,9 +117,17 @@ defmodule SymphonyElixir.Linear.Client do
         {:ok, []}
 
       ids ->
-        with {:ok, assignee_filter} <- routing_assignee_filter() do
-          do_fetch_issue_states(ids, assignee_filter)
-        end
+        fetch_scoped_issue_states(ids, tracker_scope(Config.settings!().tracker))
+    end
+  end
+
+  defp fetch_scoped_issue_states(ids, scope) when is_list(ids) and is_map(scope) do
+    if map_size(scope) == 0 do
+      {:error, :missing_linear_scope}
+    else
+      with {:ok, assignee_filter} <- routing_assignee_filter() do
+        do_fetch_issue_states(ids, scope, assignee_filter, &graphql/2)
+      end
     end
   end
 
@@ -232,29 +203,32 @@ defmodule SymphonyElixir.Linear.Client do
         {:ok, []}
 
       ids ->
-        do_fetch_issue_states(ids, nil, graphql_fun)
+        do_fetch_issue_states(ids, %{}, nil, graphql_fun)
     end
   end
 
-  defp do_fetch_by_states(project_slug, state_names, assignee_filter) do
-    do_fetch_by_states_page(project_slug, state_names, assignee_filter, nil, [])
+  defp do_fetch_by_states(scope, state_names, assignee_filter) when is_map(scope) do
+    do_fetch_by_states_page(scope, state_names, assignee_filter, nil, [])
   end
 
-  defp do_fetch_by_states_page(project_slug, state_names, assignee_filter, after_cursor, acc_issues) do
+  defp do_fetch_by_states_page(scope, state_names, assignee_filter, after_cursor, acc_issues)
+       when is_map(scope) do
     with {:ok, body} <-
-           graphql(@query, %{
-             projectSlug: project_slug,
-             stateNames: state_names,
-             first: @issue_page_size,
-             relationFirst: @issue_page_size,
-             after: after_cursor
-           }),
+           graphql(
+             candidate_query(scope),
+             scope_variables(scope, %{
+               stateNames: state_names,
+               first: @issue_page_size,
+               relationFirst: @issue_page_size,
+               after: after_cursor
+             })
+           ),
          {:ok, issues, page_info} <- decode_linear_page_response(body, assignee_filter) do
       updated_acc = prepend_page_issues(issues, acc_issues)
 
       case next_page_cursor(page_info) do
         {:ok, next_cursor} ->
-          do_fetch_by_states_page(project_slug, state_names, assignee_filter, next_cursor, updated_acc)
+          do_fetch_by_states_page(scope, state_names, assignee_filter, next_cursor, updated_acc)
 
         :done ->
           {:ok, finalize_paginated_issues(updated_acc)}
@@ -271,35 +245,35 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp finalize_paginated_issues(acc_issues) when is_list(acc_issues), do: Enum.reverse(acc_issues)
 
-  defp do_fetch_issue_states(ids, assignee_filter) do
-    do_fetch_issue_states(ids, assignee_filter, &graphql/2)
-  end
-
-  defp do_fetch_issue_states(ids, assignee_filter, graphql_fun)
-       when is_list(ids) and is_function(graphql_fun, 2) do
+  defp do_fetch_issue_states(ids, scope, assignee_filter, graphql_fun)
+       when is_list(ids) and is_map(scope) and is_function(graphql_fun, 2) do
     issue_order_index = issue_order_index(ids)
-    do_fetch_issue_states_page(ids, assignee_filter, graphql_fun, [], issue_order_index)
+    do_fetch_issue_states_page(ids, scope, assignee_filter, graphql_fun, [], issue_order_index)
   end
 
-  defp do_fetch_issue_states_page([], _assignee_filter, _graphql_fun, acc_issues, issue_order_index) do
+  defp do_fetch_issue_states_page([], _scope, _assignee_filter, _graphql_fun, acc_issues, issue_order_index) do
     acc_issues
     |> finalize_paginated_issues()
     |> sort_issues_by_requested_ids(issue_order_index)
     |> then(&{:ok, &1})
   end
 
-  defp do_fetch_issue_states_page(ids, assignee_filter, graphql_fun, acc_issues, issue_order_index) do
+  defp do_fetch_issue_states_page(ids, scope, assignee_filter, graphql_fun, acc_issues, issue_order_index)
+       when is_map(scope) do
     {batch_ids, rest_ids} = Enum.split(ids, @issue_page_size)
 
-    case graphql_fun.(@query_by_ids, %{
-           ids: batch_ids,
-           first: length(batch_ids),
-           relationFirst: @issue_page_size
-         }) do
+    case graphql_fun.(
+           issue_states_query(scope),
+           scope_variables(scope, %{
+             ids: batch_ids,
+             first: length(batch_ids),
+             relationFirst: @issue_page_size
+           })
+         ) do
       {:ok, body} ->
         with {:ok, issues} <- decode_linear_response(body, assignee_filter) do
           updated_acc = prepend_page_issues(issues, acc_issues)
-          do_fetch_issue_states_page(rest_ids, assignee_filter, graphql_fun, updated_acc, issue_order_index)
+          do_fetch_issue_states_page(rest_ids, scope, assignee_filter, graphql_fun, updated_acc, issue_order_index)
         end
 
       {:error, reason} ->
@@ -322,6 +296,105 @@ defmodule SymphonyElixir.Linear.Client do
       _ -> fallback_index
     end)
   end
+
+  defp candidate_query(scope) when is_map(scope) do
+    variable_definitions =
+      scope_variable_definitions(scope, ["$stateNames: [String!]!", "$first: Int!", "$relationFirst: Int!", "$after: String"])
+
+    filter =
+      scope_filter_clauses(scope, ["state: {name: {in: $stateNames}}"])
+
+    """
+    query SymphonyLinearPoll(#{variable_definitions}) {
+      issues(filter: {#{filter}}, first: $first, after: $after) {
+    #{@issue_selection}      pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+    """
+  end
+
+  defp issue_states_query(scope) when is_map(scope) do
+    variable_definitions =
+      scope_variable_definitions(scope, ["$ids: [ID!]!", "$first: Int!", "$relationFirst: Int!"])
+
+    filter =
+      scope_filter_clauses(scope, ["id: {in: $ids}"])
+
+    """
+    query SymphonyLinearIssuesById(#{variable_definitions}) {
+      issues(filter: {#{filter}}, first: $first) {
+    #{@issue_selection}      }
+    }
+    """
+  end
+
+  defp scope_variable_definitions(scope, base_definitions) when is_map(scope) and is_list(base_definitions) do
+    scope
+    |> scope_variable_names()
+    |> Kernel.++(base_definitions)
+    |> Enum.join(", ")
+  end
+
+  defp scope_variable_names(scope) when is_map(scope) do
+    [
+      optional_scope_fragment(scope, :project_slug, "$projectSlug: String!"),
+      optional_scope_fragment(scope, :team_key, "$teamKey: String!")
+    ]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp scope_filter_clauses(scope, base_clauses) when is_map(scope) and is_list(base_clauses) do
+    [
+      optional_scope_fragment(scope, :project_slug, "project: {slugId: {eq: $projectSlug}}"),
+      optional_scope_fragment(scope, :team_key, "team: {key: {eq: $teamKey}}")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Kernel.++(base_clauses)
+    |> Enum.join(", ")
+  end
+
+  defp optional_scope_fragment(scope, key, fragment) when is_map(scope) and is_atom(key) do
+    if Map.has_key?(scope, key), do: fragment, else: nil
+  end
+
+  defp scope_variables(scope, variables) when is_map(scope) and is_map(variables) do
+    scope
+    |> Enum.reduce(%{}, fn
+      {:project_slug, value}, acc -> Map.put(acc, :projectSlug, value)
+      {:team_key, value}, acc -> Map.put(acc, :teamKey, value)
+      {_key, _value}, acc -> acc
+    end)
+    |> Map.merge(variables)
+  end
+
+  defp tracker_scope(tracker) do
+    scope_from_values(tracker.project_slug, tracker.team_key)
+  end
+
+  defp scope_from_values(project_slug, team_key) do
+    %{}
+    |> maybe_put_scope(:project_slug, project_slug)
+    |> maybe_put_scope(:team_key, team_key)
+  end
+
+  defp maybe_put_scope(scope, key, value) when is_map(scope) and is_atom(key) do
+    case normalize_scope_value(value) do
+      nil -> scope
+      normalized -> Map.put(scope, key, normalized)
+    end
+  end
+
+  defp normalize_scope_value(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_scope_value(_value), do: nil
 
   defp build_graphql_payload(query, variables, operation_name) do
     %{

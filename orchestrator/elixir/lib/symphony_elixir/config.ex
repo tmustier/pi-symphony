@@ -147,12 +147,18 @@ defmodule SymphonyElixir.Config do
     {:error, :missing_linear_api_token}
   end
 
-  defp validate_linear_requirements(%{tracker: %{kind: "linear", project_slug: project_slug}})
-       when not is_binary(project_slug) do
-    {:error, :missing_linear_project_slug}
+  defp validate_linear_requirements(%{tracker: %{kind: "linear"} = tracker}) do
+    if linear_scope_present?(tracker.project_slug) or linear_scope_present?(tracker.team_key) do
+      :ok
+    else
+      {:error, :missing_linear_scope}
+    end
   end
 
   defp validate_linear_requirements(_settings), do: :ok
+
+  defp linear_scope_present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp linear_scope_present?(_value), do: false
 
   defp validate_worker_runtime_semantics(%{worker: %{runtime: "pi", ssh_hosts: ssh_hosts}})
        when is_list(ssh_hosts) and ssh_hosts != [] do
@@ -174,6 +180,9 @@ defmodule SymphonyElixir.Config do
 
       :workflow_front_matter_not_a_map ->
         "Failed to parse WORKFLOW.md: workflow front matter must decode to a map"
+
+      :missing_linear_scope ->
+        "Invalid WORKFLOW.md config: tracker.project_slug or tracker.team_key must be set for Linear"
 
       other ->
         "Invalid WORKFLOW.md config: #{inspect(other)}"

@@ -386,6 +386,24 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Enum.map(merged, & &1.identifier) == ["MT-1", "MT-2", "MT-3"]
   end
 
+  test "linear client can scope candidate queries to a team key" do
+    query = Client.candidate_query_for_test(nil, "THO")
+
+    assert query =~ "query SymphonyLinearPoll($teamKey: String!, $stateNames: [String!]!"
+    assert query =~ "team: {key: {eq: $teamKey}}"
+    assert query =~ "state: {name: {in: $stateNames}}"
+    refute query =~ "project: {slugId: {eq: $projectSlug}}"
+  end
+
+  test "linear client can combine project and team scope for issue state queries" do
+    query = Client.issue_states_query_for_test("project", "THO")
+
+    assert query =~ "query SymphonyLinearIssuesById($projectSlug: String!, $teamKey: String!, $ids: [ID!]!"
+    assert query =~ "project: {slugId: {eq: $projectSlug}}"
+    assert query =~ "team: {key: {eq: $teamKey}}"
+    assert query =~ "id: {in: $ids}"
+  end
+
   test "linear client paginates issue state fetches by id beyond one page" do
     issue_ids = Enum.map(1..55, &"issue-#{&1}")
     first_batch_ids = Enum.take(issue_ids, 50)

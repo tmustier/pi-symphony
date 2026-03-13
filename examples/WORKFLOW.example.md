@@ -2,7 +2,9 @@
 tracker:
   kind: linear
   api_key: "$LINEAR_API_KEY"
-  project_slug: "$LINEAR_PROJECT_SLUG"
+  team_key: "TEAMKEY"
+  # Optional extra narrowing inside the team:
+  # project_slug: "$LINEAR_PROJECT_SLUG"
   active_states:
     - Todo
     - In Progress

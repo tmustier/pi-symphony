@@ -43,13 +43,24 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: "token",
-      tracker_project_slug: nil
+      tracker_project_slug: nil,
+      tracker_team_key: nil
     )
 
-    assert {:error, :missing_linear_project_slug} = Config.validate!()
+    assert {:error, :missing_linear_scope} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_project_slug: nil,
+      tracker_team_key: "THO",
+      codex_command: "/bin/sh app-server"
+    )
+
+    assert :ok = Config.validate!()
+    assert Config.settings!().tracker.team_key == "THO"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_project_slug: "project",
+      tracker_team_key: nil,
       codex_command: ""
     )
 

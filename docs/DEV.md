@@ -26,6 +26,39 @@ That will:
 - install Elixir dependencies for `orchestrator/elixir`
 - install git hooks via Lefthook
 
+## Local secrets
+
+Keep tracker credentials out of git.
+
+Recommended order:
+
+1. **Best:** inject `LINEAR_API_KEY` from a secret manager at launch time (for example 1Password, macOS Keychain, or your deployment secret store).
+2. **Acceptable for local development:** use a repo-local `.env.local` file, which is already gitignored.
+
+Example `.env.local`:
+
+```bash
+LINEAR_API_KEY=lin_api_...
+```
+
+Load it only into your current shell before starting the orchestrator:
+
+```bash
+set -a
+source .env.local
+set +a
+```
+
+Then keep the workflow itself secret-free:
+
+```yaml
+tracker:
+  api_key: "$LINEAR_API_KEY"
+  team_key: "THO"
+```
+
+Prefer `tracker.team_key` as the primary safety boundary. Add `tracker.project_slug` only when you want to narrow further inside that team.
+
 ## Common commands
 
 ```bash
@@ -112,7 +145,7 @@ Copy it into a target repo as `WORKFLOW.md`, then adjust:
 
 ## Validation / hardening when Elixir toolchain is available
 
-This environment still lacks a local `mix` toolchain, but the intended final validation path is:
+The full local validation path is:
 
 ```bash
 make check-ts
@@ -120,7 +153,7 @@ make check-elixir
 make check
 ```
 
-Recommended order once `mix` is available:
+Recommended order:
 
 1. `make setup`
 2. `make check-ts`
