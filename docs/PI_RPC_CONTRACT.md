@@ -183,6 +183,13 @@ The initial unattended worker bundle should include:
 
 - `workspace-guard` — blocks obvious workspace escapes on `read`, `write`, `edit`, and suspicious `bash` path references
 - `proof` — writes worker-side proof artifacts next to the Pi session file when available
+- `linear-graphql` — restores the imported Symphony `linear_graphql` tool for Pi workers without leaking auth into prompts
+
+The `linear-graphql` extension expects worker environment variables derived from orchestrator config:
+
+- `PI_SYMPHONY_TRACKER_KIND`
+- `PI_SYMPHONY_LINEAR_ENDPOINT`
+- `PI_SYMPHONY_LINEAR_API_KEY`
 
 The proof extension should emit at least:
 

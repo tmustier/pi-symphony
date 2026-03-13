@@ -265,7 +265,8 @@ defmodule SymphonyElixir.Pi.RpcClient do
   defp auto_cancel_inline(_port, _payload), do: :ok
 
   defp build_command(session_dir) do
-    pi = Config.settings!().pi
+    settings = Config.settings!()
+    pi = settings.pi
 
     flags =
       [
@@ -281,7 +282,10 @@ defmodule SymphonyElixir.Pi.RpcClient do
       |> Enum.reject(&(&1 in [nil, false, ""]))
       |> Enum.join(" ")
 
-    "exec #{flags}"
+    case tracker_env_assignments(settings) do
+      [] -> "exec #{flags}"
+      assignments -> "exec env #{Enum.join(assignments, " ")} #{flags}"
+    end
   end
 
   defp send_message(port, message) do
@@ -305,6 +309,21 @@ defmodule SymphonyElixir.Pi.RpcClient do
   defp unique_suffix do
     integer = System.unique_integer([:positive])
     Integer.to_string(integer)
+  end
+
+  defp tracker_env_assignments(settings) do
+    tracker = settings.tracker
+
+    [
+      tracker.kind && env_assignment("PI_SYMPHONY_TRACKER_KIND", tracker.kind),
+      tracker.endpoint && env_assignment("PI_SYMPHONY_LINEAR_ENDPOINT", tracker.endpoint),
+      tracker.api_key && env_assignment("PI_SYMPHONY_LINEAR_API_KEY", tracker.api_key)
+    ]
+    |> Enum.reject(&(&1 in [nil, false, ""]))
+  end
+
+  defp env_assignment(key, value) when is_binary(key) and is_binary(value) do
+    "#{key}=#{shell_escape(value)}"
   end
 
   defp shell_escape(value) when is_binary(value) do

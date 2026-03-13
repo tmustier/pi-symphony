@@ -109,11 +109,13 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
       extension_dir = Path.join(workflow_root, "extensions")
       workspace_guard = Path.join(extension_dir, "workspace-guard.ts")
       proof = Path.join(extension_dir, "proof.ts")
+      linear_graphql = Path.join(extension_dir, "linear-graphql.ts")
 
       File.mkdir_p!(workspace_root)
       File.mkdir_p!(extension_dir)
       File.write!(workspace_guard, "export default function () {}\n")
       File.write!(proof, "export default function () {}\n")
+      File.write!(linear_graphql, "export default function () {}\n")
       System.put_env("SYMP_TEST_PI_TRACE", trace_file)
 
       File.write!(
@@ -122,6 +124,7 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
         #!/bin/sh
         trace_file="${SYMP_TEST_PI_TRACE:-/tmp/pi.trace}"
         printf 'ARGV:%s\\n' "$*" >> "$trace_file"
+        printf 'ENV:%s|%s|%s\\n' "${PI_SYMPHONY_TRACKER_KIND:-}" "${PI_SYMPHONY_LINEAR_ENDPOINT:-}" "${PI_SYMPHONY_LINEAR_API_KEY:-}" >> "$trace_file"
         count=0
 
         while IFS= read -r line; do
@@ -154,7 +157,11 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
         workspace_root: workspace_root,
         worker_runtime: "pi",
         pi_command: fake_pi,
-        pi_extension_paths: ["extensions/workspace-guard.ts", "./extensions/proof.ts"]
+        pi_extension_paths: [
+          "extensions/workspace-guard.ts",
+          "./extensions/proof.ts",
+          "extensions/linear-graphql.ts"
+        ]
       )
 
       issue = %Issue{
@@ -178,6 +185,8 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
       assert trace =~ "--no-themes"
       assert trace =~ "--extension #{workspace_guard}"
       assert trace =~ "--extension #{proof}"
+      assert trace =~ "--extension #{linear_graphql}"
+      assert trace =~ "ENV:linear|https://api.linear.app/graphql|token"
     after
       restore_env("SYMP_TEST_PI_TRACE", previous_trace)
       File.rm_rf(test_root)
