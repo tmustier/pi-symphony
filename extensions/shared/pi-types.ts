@@ -38,8 +38,36 @@ export interface AgentEndEventLike {
   messages?: unknown[];
 }
 
+export interface ToolContentPart {
+  type: "text";
+  text: string;
+}
+
+export interface ToolExecutionResult {
+  content: ToolContentPart[];
+  details?: Record<string, unknown>;
+  isError?: boolean;
+}
+
+export interface ToolDefinitionLike {
+  name: string;
+  label: string;
+  description: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
+  parameters: Record<string, unknown>;
+  execute(
+    toolCallId: string,
+    params: unknown,
+    signal: AbortSignal,
+    onUpdate?: ((update: ToolExecutionResult) => void) | undefined,
+    ctx?: ExtensionContextLike,
+  ): Promise<ToolExecutionResult>;
+}
+
 export interface ExtensionApiLike {
   on(eventName: string, handler: (event: unknown, ctx: ExtensionContextLike) => unknown): void;
+  registerTool?(definition: ToolDefinitionLike): void;
 }
 
 export interface ToolBlockResult {
