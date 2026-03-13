@@ -11,13 +11,13 @@ defmodule SymphonyElixir.AgentRunner do
   @type worker_host :: String.t() | nil
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
-  def run(issue, codex_update_recipient \\ nil, opts \\ []) do
+  def run(issue, worker_update_recipient \\ nil, opts \\ []) do
     worker_hosts =
       candidate_worker_hosts(Keyword.get(opts, :worker_host), Config.settings!().worker.ssh_hosts)
 
     Logger.info("Starting agent run for #{issue_context(issue)} worker_hosts=#{inspect(worker_hosts_for_log(worker_hosts))}")
 
-    case run_on_worker_hosts(issue, codex_update_recipient, opts, worker_hosts) do
+    case run_on_worker_hosts(issue, worker_update_recipient, opts, worker_hosts) do
       :ok ->
         :ok
 
@@ -27,32 +27,32 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp run_on_worker_hosts(issue, codex_update_recipient, opts, [worker_host | rest]) do
-    case run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do
+  defp run_on_worker_hosts(issue, worker_update_recipient, opts, [worker_host | rest]) do
+    case run_on_worker_host(issue, worker_update_recipient, opts, worker_host) do
       :ok ->
         :ok
 
       {:error, reason} when rest != [] ->
         Logger.warning("Agent run failed for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)} reason=#{inspect(reason)}; trying next worker host")
-        run_on_worker_hosts(issue, codex_update_recipient, opts, rest)
+        run_on_worker_hosts(issue, worker_update_recipient, opts, rest)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp run_on_worker_hosts(_issue, _codex_update_recipient, _opts, []), do: {:error, :no_worker_hosts_available}
+  defp run_on_worker_hosts(_issue, _worker_update_recipient, _opts, []), do: {:error, :no_worker_hosts_available}
 
-  defp run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do
+  defp run_on_worker_host(issue, worker_update_recipient, opts, worker_host) do
     Logger.info("Starting worker attempt for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 
     case Workspace.create_for_issue(issue, worker_host) do
       {:ok, workspace} ->
-        send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
+        send_worker_runtime_info(worker_update_recipient, issue, worker_host, workspace)
 
         try do
           with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
-            run_worker_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+            run_worker_turns(workspace, issue, worker_update_recipient, opts, worker_host)
           end
         after
           Workspace.run_after_run_hook(workspace, issue, worker_host)
@@ -63,19 +63,19 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp codex_message_handler(recipient, issue) do
+  defp worker_message_handler(recipient, issue) do
     fn message ->
-      send_codex_update(recipient, issue, message)
+      send_worker_update(recipient, issue, message)
     end
   end
 
-  defp send_codex_update(recipient, %Issue{id: issue_id}, message)
+  defp send_worker_update(recipient, %Issue{id: issue_id}, message)
        when is_binary(issue_id) and is_pid(recipient) do
     send(recipient, {:codex_worker_update, issue_id, message})
     :ok
   end
 
-  defp send_codex_update(_recipient, _issue, _message), do: :ok
+  defp send_worker_update(_recipient, _issue, _message), do: :ok
 
   defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, runtime_info)
        when is_binary(issue_id) and is_pid(recipient) and is_map(runtime_info) do
@@ -108,14 +108,14 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_worker_session_runtime_info(_recipient, _issue, _session), do: :ok
 
-  defp run_worker_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
+  defp run_worker_turns(workspace, issue, worker_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
     runtime_module = worker_runtime_module()
 
     with {:ok, session} <- runtime_module.start_session(workspace, worker_host: worker_host) do
       if runtime_module == WorkerRunner do
-        send_worker_session_runtime_info(codex_update_recipient, issue, session)
+        send_worker_session_runtime_info(worker_update_recipient, issue, session)
       end
 
       try do
@@ -124,7 +124,7 @@ defmodule SymphonyElixir.AgentRunner do
           session,
           workspace,
           issue,
-          codex_update_recipient,
+          worker_update_recipient,
           opts,
           issue_state_fetcher,
           1,
@@ -136,7 +136,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp do_run_worker_turns(runtime_module, session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
+  defp do_run_worker_turns(runtime_module, session, workspace, issue, worker_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
 
     with {:ok, turn_session} <-
@@ -144,7 +144,7 @@ defmodule SymphonyElixir.AgentRunner do
              session,
              prompt,
              issue,
-             on_message: codex_message_handler(codex_update_recipient, issue),
+             on_message: worker_message_handler(worker_update_recipient, issue),
              turn_number: turn_number
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
@@ -158,7 +158,7 @@ defmodule SymphonyElixir.AgentRunner do
             session,
             workspace,
             refreshed_issue,
-            codex_update_recipient,
+            worker_update_recipient,
             opts,
             issue_state_fetcher,
             turn_number + 1,

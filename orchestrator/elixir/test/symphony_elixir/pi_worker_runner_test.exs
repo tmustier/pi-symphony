@@ -71,6 +71,7 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
         labels: ["backend"]
       }
 
+      expected_workspace = Path.join(workspace_root, "PI-101")
       test_pid = self()
 
       assert :ok =
@@ -79,6 +80,18 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
                  test_pid,
                  issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
                )
+
+      assert_receive {:worker_runtime_info, "issue-pi-runtime",
+                      %{
+                        worker_host: nil,
+                        workspace_path: ^expected_workspace,
+                        session_file: "/tmp/pi-session.jsonl",
+                        session_dir: "/tmp",
+                        proof_dir: "/tmp/proof",
+                        proof_events_path: "/tmp/proof/events.jsonl",
+                        proof_summary_path: "/tmp/proof/summary.json"
+                      }},
+                     1_000
 
       assert_receive {:codex_worker_update, "issue-pi-runtime",
                       %{event: :session_started, session_id: "pi-session-turn-1", timestamp: %DateTime{}}},
