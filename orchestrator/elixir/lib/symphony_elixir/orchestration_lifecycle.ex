@@ -24,16 +24,16 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     settings = Keyword.get(opts, :settings, Config.settings!())
     runtime = OrchestrationPolicy.issue_runtime(issue, settings)
 
-    if manage_workpad?(runtime) do
+    if manage_workpad?(issue, runtime) do
       Workpad.sync(
         issue,
         %{
-          owned: managed_owned?(runtime),
+          owned: managed_owned?(issue, runtime),
           phase: runtime.phase,
           branch: issue.branch_name,
           waiting_reason: runtime.waiting_reason,
           next_intended_action: runtime.next_intended_action,
-          observation_gates: bootstrap_gates(runtime)
+          observation_gates: bootstrap_gates(issue, runtime)
         },
         Keyword.put(opts, :settings, settings)
       )
@@ -102,10 +102,10 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     pr_metadata = pr_metadata(pr_result, head_sha)
 
     base_updates = %{
-      owned: managed_owned?(runtime),
+      owned: managed_owned?(issue, runtime),
       branch: branch,
       pr: pr_metadata,
-      observation_gates: observation_gates(runtime, pr_result),
+      observation_gates: observation_gates(issue, runtime, pr_result),
       next_intended_action: next_action(runtime, pr_result),
       waiting_reason: waiting_reason(runtime, pr_result),
       phase: phase_after_reconcile(runtime, pr_result)
@@ -120,18 +120,38 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
-  defp phase_after_reconcile(_runtime, {:ok, _pr_info}), do: "waiting_for_checks"
+  defp phase_after_reconcile(runtime, {:ok, pr_info}) do
+    if promote_to_waiting_for_checks?(runtime, pr_info) do
+      "waiting_for_checks"
+    else
+      runtime.phase
+    end
+  end
 
   defp phase_after_reconcile(_runtime, {:skip, %{reason: :closed_pr_policy_stop}}), do: "blocked"
   defp phase_after_reconcile(_runtime, {:skip, %{reason: :merged_pr_cannot_reopen}}), do: "blocked"
   defp phase_after_reconcile(runtime, _pr_result), do: runtime.phase
 
-  defp waiting_reason(_runtime, {:ok, _pr_info}), do: "checks_pending"
+  defp waiting_reason(runtime, {:ok, pr_info}) do
+    if promote_to_waiting_for_checks?(runtime, pr_info) do
+      "checks_pending"
+    else
+      runtime.waiting_reason
+    end
+  end
+
   defp waiting_reason(_runtime, {:skip, %{reason: :closed_pr_policy_stop}}), do: "missing_context"
   defp waiting_reason(_runtime, {:skip, %{reason: :merged_pr_cannot_reopen}}), do: "missing_context"
   defp waiting_reason(runtime, _pr_result), do: runtime.waiting_reason
 
-  defp next_action(_runtime, {:ok, _pr_info}), do: "poll_on_next_cycle"
+  defp next_action(runtime, {:ok, pr_info}) do
+    if promote_to_waiting_for_checks?(runtime, pr_info) do
+      "poll_on_next_cycle"
+    else
+      runtime.next_intended_action
+    end
+  end
+
   defp next_action(_runtime, {:skip, %{next_intended_action: action}}) when is_binary(action), do: action
   defp next_action(_runtime, {:error, _reason}), do: "repair_pr_publication"
 
@@ -159,50 +179,58 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     }
   end
 
-  defp observation_gates(runtime, {:ok, _pr_info}) do
-    Map.merge(bootstrap_gates(runtime), %{"pr" => "open"})
+  defp observation_gates(issue, runtime, {:ok, _pr_info}) do
+    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "open"})
   end
 
-  defp observation_gates(runtime, {:skip, %{reason: :observe_only}}) do
-    Map.merge(bootstrap_gates(runtime), %{"pr" => "observe_only"})
+  defp observation_gates(issue, runtime, {:skip, %{reason: :observe_only}}) do
+    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "observe_only"})
   end
 
-  defp observation_gates(runtime, {:skip, %{reason: :auto_create_disabled}}) do
-    Map.merge(bootstrap_gates(runtime), %{"pr" => "policy_disabled"})
+  defp observation_gates(issue, runtime, {:skip, %{reason: :auto_create_disabled}}) do
+    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "policy_disabled"})
   end
 
-  defp observation_gates(runtime, {:skip, %{reason: :closed_pr_policy_stop}}) do
-    Map.merge(bootstrap_gates(runtime), %{"pr" => "blocked"})
+  defp observation_gates(issue, runtime, {:skip, %{reason: :closed_pr_policy_stop}}) do
+    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "blocked"})
   end
 
-  defp observation_gates(runtime, {:skip, %{reason: :merged_pr_cannot_reopen}}) do
-    Map.merge(bootstrap_gates(runtime), %{"pr" => "blocked"})
+  defp observation_gates(issue, runtime, {:skip, %{reason: :merged_pr_cannot_reopen}}) do
+    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "blocked"})
   end
 
-  defp observation_gates(runtime, {:skip, _details}) do
-    Map.merge(bootstrap_gates(runtime), %{"pr" => "pending"})
+  defp observation_gates(issue, runtime, {:skip, _details}) do
+    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "pending"})
   end
 
-  defp observation_gates(runtime, {:error, _reason}) do
-    Map.merge(bootstrap_gates(runtime), %{"pr" => "tool_unavailable"})
+  defp observation_gates(issue, runtime, {:error, _reason}) do
+    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "tool_unavailable"})
   end
 
-  defp bootstrap_gates(runtime) do
+  defp bootstrap_gates(issue, runtime) do
     %{
-      "ownership" => if(managed_owned?(runtime), do: "pass", else: "fail"),
+      "ownership" => if(managed_owned?(issue, runtime), do: "pass", else: "fail"),
       "kill_switch" => if(fetch_value(runtime.kill_switch, :active) == true, do: "active", else: "pass"),
       "dispatch" => if(runtime.dispatch_allowed, do: "pass", else: "blocked")
     }
   end
 
-  defp manage_workpad?(runtime) do
-    case fetch_value(runtime.ownership, :required_label) do
-      value when is_binary(value) -> fetch_value(runtime.ownership, :label_present) == true
-      _ -> true
-    end
+  defp manage_workpad?(issue, runtime) do
+    managed_owned?(issue, runtime)
   end
 
-  defp managed_owned?(runtime) do
+  defp managed_owned?(%Issue{assigned_to_worker: assigned_to_worker}, runtime)
+       when is_boolean(assigned_to_worker) do
+    assigned_to_worker and label_gate_passed?(runtime)
+  end
+
+  defp promote_to_waiting_for_checks?(runtime, pr_info) when is_map(pr_info) do
+    action = Map.get(pr_info, :action)
+
+    action in [:created, :reopened] or runtime.phase in ["implementing", "reviewing", "rework"]
+  end
+
+  defp label_gate_passed?(runtime) do
     case fetch_value(runtime.ownership, :required_label) do
       value when is_binary(value) -> fetch_value(runtime.ownership, :label_present) == true
       _ -> true

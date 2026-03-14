@@ -267,6 +267,55 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
+  test "candidate lifecycle bootstrap skips issues not routed to this worker when no label gate is configured" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "In Review"],
+      orchestration_required_label: nil,
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    issue = %Issue{
+      id: "issue-unowned-bootstrap",
+      identifier: "MT-703U",
+      state: "Todo",
+      title: "Do not mutate unowned issues",
+      description: "Bootstrap should skip issues routed elsewhere",
+      labels: [],
+      comments: [],
+      assigned_to_worker: false
+    }
+
+    state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new(),
+      completed: MapSet.new(),
+      retry_attempts: %{},
+      tracked: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      [same_issue] = Orchestrator.reconcile_candidate_issue_lifecycles_for_test([issue], state)
+      refute_receive {:memory_tracker_comment, _, _}
+      assert same_issue.comments == []
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "candidate lifecycle bootstrap creates a missing workpad for owned issues before dispatch" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
@@ -305,6 +354,94 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert_receive {:memory_tracker_comment, "issue-bootstrap", _body}
       assert Orchestrator.should_dispatch_issue_for_test(bootstrapped_issue, state)
       assert Enum.any?(bootstrapped_issue.comments, fn comment -> String.contains?(comment.body, "## Symphony Workpad") end)
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle preserves later PR phases when it only reuses an existing open PR" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: []
+    )
+
+    issue = %Issue{
+      id: "issue-pr-reuse",
+      identifier: "MT-704R",
+      state: "In Review",
+      title: "Keep later phase",
+      description: "Do not regress waiting_for_human",
+      url: "https://example.org/issues/MT-704R",
+      branch_name: "feature/pr-reuse",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_human\n  branch: feature/pr-reuse\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 99,
+             "url" => "https://github.com/acme/widgets/pull/99",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/pr-reuse",
+             "headRefOid" => "reuse123",
+             "baseRefName" => "main"
+           }
+         ])}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-pr-reuse"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-pr-reuse",
+                 %{workspace_path: nil, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.phase == "waiting_for_human"
+      assert runtime.waiting_reason == nil
+      assert runtime.workpad.metadata["pr"]["number"] == 99
     after
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
