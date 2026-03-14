@@ -9,7 +9,8 @@ defmodule SymphonyElixir.WorkspaceGit do
           branch: String.t() | nil,
           head_sha: String.t() | nil,
           origin_url: String.t() | nil,
-          repo_slug: String.t() | nil
+          repo_slug: String.t() | nil,
+          remote_branch_published: boolean()
         }
 
   @doc false
@@ -60,7 +61,11 @@ defmodule SymphonyElixir.WorkspaceGit do
       "branch=$(git branch --show-current 2>/dev/null || true)",
       "head_sha=$(git rev-parse HEAD 2>/dev/null || true)",
       "origin_url=$(git remote get-url origin 2>/dev/null || true)",
-      "printf 'branch=%s\nhead_sha=%s\norigin_url=%s\n' \"$branch\" \"$head_sha\" \"$origin_url\""
+      "remote_branch_published=0",
+      "if [ -n \"$branch\" ] && [ -n \"$origin_url\" ] && GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code --heads origin \"$branch\" >/dev/null 2>&1; then",
+      "  remote_branch_published=1",
+      "fi",
+      "printf 'branch=%s\nhead_sha=%s\norigin_url=%s\nremote_branch_published=%s\n' \"$branch\" \"$head_sha\" \"$origin_url\" \"$remote_branch_published\""
     ]
     |> Enum.join("\n")
   end
@@ -82,7 +87,8 @@ defmodule SymphonyElixir.WorkspaceGit do
       branch: Map.get(values, "branch"),
       head_sha: Map.get(values, "head_sha"),
       origin_url: origin_url,
-      repo_slug: repo_slug_from_remote(origin_url)
+      repo_slug: repo_slug_from_remote(origin_url),
+      remote_branch_published: Map.get(values, "remote_branch_published") == "1"
     }
   end
 

@@ -15,7 +15,7 @@ defmodule SymphonyElixir.PullRequests do
   def resolve_or_create(%Issue{} = issue, git_state, opts \\ []) when is_map(git_state) and is_list(opts) do
     settings = Keyword.get(opts, :settings, Config.settings!())
     runner = Keyword.get(opts, :runner, command_runner())
-    context = branch_context(issue, git_state, settings)
+    context = branch_context(issue, git_state, settings, opts)
 
     cond do
       is_nil(context.repo_slug) ->
@@ -61,18 +61,45 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp maybe_skip_pr_creation(closed_pr, context, settings, true) do
-    cond do
-      settings.pr.auto_create != true ->
-        {:skip, skip_result(:auto_create_disabled, context, "create_pr_when_policy_allows", closed_pr)}
+    case skip_pr_creation_result(closed_pr, context, settings) do
+      nil -> :continue
+      result -> {:skip, result}
+    end
+  end
 
-      closed_pr && settings.pr.closed_pr_policy == "stop" ->
-        {:skip, skip_result(:closed_pr_policy_stop, context, "resolve_closed_pr_policy", closed_pr)}
+  defp skip_pr_creation_result(closed_pr, context, settings) do
+    auto_create_skip(closed_pr, context, settings) ||
+      closed_pr_policy_skip(closed_pr, context, settings) ||
+      remote_branch_skip(closed_pr, context)
+  end
 
-      closed_pr && settings.pr.closed_pr_policy == "reopen" && closed_pr.state == "MERGED" ->
-        {:skip, skip_result(:merged_pr_cannot_reopen, context, "push_new_branch_for_followup", closed_pr)}
+  defp auto_create_skip(closed_pr, context, settings) do
+    if settings.pr.auto_create != true do
+      skip_result(:auto_create_disabled, context, "create_pr_when_policy_allows", closed_pr)
+    end
+  end
 
-      true ->
-        :continue
+  defp closed_pr_policy_skip(nil, _context, _settings), do: nil
+
+  defp closed_pr_policy_skip(closed_pr, context, settings) do
+    case {settings.pr.closed_pr_policy, closed_pr.state} do
+      {"stop", _state} ->
+        skip_result(:closed_pr_policy_stop, context, "resolve_closed_pr_policy", closed_pr)
+
+      {"new_branch", _state} ->
+        skip_result(:new_branch_required, context, "push_new_branch_for_followup", closed_pr)
+
+      {"reopen", "MERGED"} ->
+        skip_result(:merged_pr_cannot_reopen, context, "push_new_branch_for_followup", closed_pr)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp remote_branch_skip(closed_pr, context) do
+    if context.remote_branch_published != true do
+      skip_result(:remote_branch_missing, context, "push_branch_to_origin", closed_pr)
     end
   end
 
@@ -120,12 +147,13 @@ defmodule SymphonyElixir.PullRequests do
     }
   end
 
-  defp branch_context(issue, git_state, settings) do
+  defp branch_context(issue, git_state, settings, opts) do
     %{
       branch: pick_optional_string([Map.get(git_state, :branch), issue.branch_name]),
       head_sha: pick_optional_string([Map.get(git_state, :head_sha)]),
-      repo_slug: pick_optional_string([Map.get(git_state, :repo_slug)]),
-      base_branch: settings.pr.base_branch
+      repo_slug: pick_optional_string([Keyword.get(opts, :repo_slug), Map.get(git_state, :repo_slug)]),
+      base_branch: settings.pr.base_branch,
+      remote_branch_published: Map.get(git_state, :remote_branch_published) == true
     }
   end
 
