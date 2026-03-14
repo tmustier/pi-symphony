@@ -128,7 +128,7 @@ defmodule SymphonyElixir.Workpad do
         runtime.phase || settings.orchestration.default_phase
 
     waiting_reason = select_waiting_reason(target_phase, runtime, current_metadata, updates)
-    observation_gates = observation_gates(runtime, updates)
+    observation_gates = observation_gates(runtime, current_metadata, updates)
 
     %{
       "schema_version" => @schema_version,
@@ -214,7 +214,15 @@ defmodule SymphonyElixir.Workpad do
     }
   end
 
-  defp observation_gates(runtime, updates) do
+  defp observation_gates(runtime, current_metadata, updates) do
+    existing =
+      current_metadata
+      |> normalize_map()
+      |> Map.get("observation", %{})
+      |> normalize_map()
+      |> Map.get("gates", %{})
+      |> normalize_map()
+
     current = normalize_map(Map.get(updates, :observation_gates, %{}))
 
     default_gates = %{
@@ -223,7 +231,9 @@ defmodule SymphonyElixir.Workpad do
       "dispatch" => if(runtime.dispatch_allowed, do: "pass", else: "blocked")
     }
 
-    Map.merge(default_gates, current)
+    existing
+    |> Map.merge(default_gates)
+    |> Map.merge(current)
   end
 
   defp build_normal_body(marker, metadata, existing_body) do

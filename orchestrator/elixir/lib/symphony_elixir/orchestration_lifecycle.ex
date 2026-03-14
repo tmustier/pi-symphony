@@ -23,17 +23,19 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   def bootstrap_issue(%Issue{} = issue, opts \\ []) do
     settings = Keyword.get(opts, :settings, Config.settings!())
     runtime = OrchestrationPolicy.issue_runtime(issue, settings)
+    passive_pr_updates = passive_pr_updates(issue, runtime, opts, settings)
 
     if manage_workpad?(issue, runtime) do
       Workpad.sync(
         issue,
         %{
           owned: managed_owned?(issue, runtime),
-          phase: runtime.phase,
+          phase: Map.get(passive_pr_updates, :phase, runtime.phase),
           branch: issue.branch_name,
-          waiting_reason: runtime.waiting_reason,
-          next_intended_action: runtime.next_intended_action,
-          observation_gates: bootstrap_gates(issue, runtime)
+          pr: Map.get(passive_pr_updates, :pr),
+          waiting_reason: Map.get(passive_pr_updates, :waiting_reason, runtime.waiting_reason),
+          next_intended_action: Map.get(passive_pr_updates, :next_intended_action, runtime.next_intended_action),
+          observation_gates: Map.merge(bootstrap_gates(issue, runtime), Map.get(passive_pr_updates, :observation_gates, %{}))
         },
         Keyword.put(opts, :settings, settings)
       )
@@ -329,6 +331,190 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     |> current_review_metadata()
     |> Map.get("comment_id")
   end
+
+  defp current_pr_metadata(runtime) do
+    runtime
+    |> fetch_value(:workpad)
+    |> fetch_value(:metadata)
+    |> normalize_map()
+    |> Map.get("pr", %{})
+    |> normalize_map()
+  end
+
+  defp passive_pr_updates(issue, runtime, opts, settings) do
+    with true <- runtime.passive_phase == true,
+         {:ok, context} <- passive_pr_context(runtime, opts),
+         result <- PullRequests.inspect_state(context, Keyword.put(opts, :settings, settings)) do
+      passive_pr_updates_from_result(result, issue, runtime, settings)
+    else
+      false -> %{}
+      {:skip, _details} -> %{}
+    end
+  end
+
+  defp passive_pr_context(runtime, opts) do
+    pr_metadata = current_pr_metadata(runtime)
+    pr_number = Map.get(pr_metadata, "number")
+    pr_url = Map.get(pr_metadata, "url")
+    repo_slug = Keyword.get(opts, :repo_slug)
+
+    if is_integer(pr_number) or (is_binary(pr_number) and String.trim(pr_number) != "") or is_binary(pr_url) do
+      {:ok, %{number: pr_number, url: pr_url, repo_slug: repo_slug}}
+    else
+      {:skip, %{reason: :missing_pr_number}}
+    end
+  end
+
+  defp passive_pr_updates_from_result({:ok, pr_state}, issue, runtime, settings) when is_map(pr_state) do
+    pr_metadata = %{number: pr_state.number, url: pr_state.url, head_sha: pr_state.head_sha}
+    review_status = review_gate(runtime, %{head_sha: pr_state.head_sha}, nil, settings)
+    observation_gates = passive_pr_observation_gates(issue, pr_state, review_status, settings)
+
+    %{
+      phase: passive_phase_after_observation(issue, runtime, pr_state, review_status, settings),
+      pr: pr_metadata,
+      waiting_reason: passive_waiting_reason(issue, runtime, pr_state, review_status, settings),
+      next_intended_action: passive_next_action(issue, runtime, pr_state, review_status, settings),
+      observation_gates: observation_gates
+    }
+  end
+
+  defp passive_pr_updates_from_result({:error, _reason}, _issue, _runtime, _settings) do
+    %{
+      observation_gates: %{
+        "pr" => "tool_unavailable",
+        "checks" => "unknown",
+        "mergeability" => "unknown"
+      }
+    }
+  end
+
+  defp passive_pr_updates_from_result(_result, _issue, _runtime, _settings), do: %{}
+
+  defp passive_pr_observation_gates(issue, pr_state, review_status, settings) do
+    %{
+      "pr" => passive_pr_gate(pr_state),
+      "review" => review_status,
+      "checks" => checks_gate(pr_state),
+      "human_approval" => human_approval_gate(issue, settings),
+      "mergeability" => mergeability_gate(pr_state)
+    }
+  end
+
+  defp passive_phase_after_observation(issue, runtime, pr_state, review_status, settings) do
+    cond do
+      passive_pr_gate(pr_state) != "open" -> "blocked"
+      mergeability_ready?(pr_state) != true -> "waiting_for_checks"
+      checks_ready?(pr_state, settings) != true -> "waiting_for_checks"
+      review_ready?(review_status, settings) != true -> "waiting_for_checks"
+      human_approval_ready?(issue, settings) != true -> "waiting_for_human"
+      ready_to_merge_promotion_allowed?(settings) -> "ready_to_merge"
+      true -> runtime.phase
+    end
+  end
+
+  defp passive_waiting_reason(issue, _runtime, pr_state, review_status, settings) do
+    cond do
+      passive_pr_gate(pr_state) != "open" -> "missing_context"
+      mergeability_gate(pr_state) == "blocked" -> "mergeability_changed"
+      true -> passive_readiness_waiting_reason(issue, pr_state, review_status, settings)
+    end
+  end
+
+  defp passive_readiness_waiting_reason(issue, pr_state, review_status, settings) do
+    cond do
+      mergeability_ready?(pr_state) != true -> "checks_pending"
+      checks_ready?(pr_state, settings) != true -> "checks_pending"
+      review_ready?(review_status, settings) != true -> "checks_pending"
+      human_approval_ready?(issue, settings) != true -> "human_approval_required"
+      true -> nil
+    end
+  end
+
+  defp passive_next_action(issue, runtime, pr_state, review_status, settings) do
+    cond do
+      passive_pr_gate(pr_state) != "open" -> non_open_pr_next_action(pr_state)
+      mergeability_gate(pr_state) == "blocked" -> "repair_mergeability"
+      mergeability_ready?(pr_state) != true -> "poll_on_next_cycle"
+      true -> passive_readiness_next_action(issue, runtime, pr_state, review_status, settings)
+    end
+  end
+
+  defp passive_readiness_next_action(issue, runtime, pr_state, review_status, settings) do
+    cond do
+      checks_gate(pr_state) == "fail" -> "investigate_failing_checks"
+      checks_ready?(pr_state, settings) != true -> "poll_on_next_cycle"
+      review_status == "stale" -> "rerun_review_for_current_head"
+      review_status == "missing" -> "persist_review_artifact"
+      review_ready?(review_status, settings) != true -> runtime.next_intended_action
+      human_approval_ready?(issue, settings) != true -> "await_human_approval"
+      true -> "merge_when_green"
+    end
+  end
+
+  defp passive_pr_gate(%{state: state, draft?: draft?}) do
+    cond do
+      state == "MERGED" -> "merged"
+      state == "CLOSED" -> "closed"
+      draft? == true -> "draft"
+      true -> "open"
+    end
+  end
+
+  defp non_open_pr_next_action(pr_state) do
+    case passive_pr_gate(pr_state) do
+      "merged" -> "reconcile_merged_pr"
+      "closed" -> "reconcile_closed_pr"
+      "draft" -> "resolve_pr_draft_state"
+      _ -> "poll_on_next_cycle"
+    end
+  end
+
+  defp checks_gate(%{checks: %{state: state}}) when is_binary(state), do: state
+  defp checks_gate(_pr_state), do: "unknown"
+
+  defp human_approval_gate(_issue, settings)
+       when settings.merge.require_human_approval != true or settings.merge.approval_states == [],
+       do: "not_required"
+
+  defp human_approval_gate(%Issue{state: state}, settings) do
+    if state in settings.merge.approval_states do
+      "approved"
+    else
+      "required"
+    end
+  end
+
+  defp human_approval_ready?(issue, settings), do: human_approval_gate(issue, settings) in ["approved", "not_required"]
+
+  defp mergeability_gate(%{state: state, draft?: draft?, mergeable: mergeable, merge_state_status: merge_state_status}) do
+    mergeable = normalize_token(mergeable)
+    merge_state_status = normalize_token(merge_state_status)
+
+    cond do
+      state in ["MERGED", "CLOSED"] -> "blocked"
+      draft? == true -> "blocked"
+      mergeable == "CONFLICTING" -> "blocked"
+      merge_state_status in ["DIRTY", "BLOCKED", "DRAFT"] -> "blocked"
+      mergeable == "MERGEABLE" -> "pass"
+      merge_state_status in ["CLEAN", "UNSTABLE", "HAS_HOOKS"] -> "pass"
+      true -> "unknown"
+    end
+  end
+
+  defp mergeability_ready?(pr_state), do: mergeability_gate(pr_state) == "pass"
+
+  defp ready_to_merge_promotion_allowed?(settings), do: settings.rollout.mode in ["mutate", "merge"]
+
+  defp checks_ready?(pr_state, settings) do
+    settings.merge.require_green_checks != true or checks_gate(pr_state) == "pass"
+  end
+
+  defp review_ready?(_review_status, settings) when settings.review.enabled != true, do: true
+  defp review_ready?(review_status, _settings), do: review_status in ["current", "persisted"]
+
+  defp normalize_token(value) when is_binary(value), do: String.upcase(String.trim(value))
+  defp normalize_token(_value), do: nil
 
   defp maybe_put_review_update(updates, nil), do: updates
   defp maybe_put_review_update(updates, review), do: Map.put(updates, :review, review)

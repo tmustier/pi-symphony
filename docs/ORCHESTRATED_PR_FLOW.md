@@ -249,6 +249,8 @@ Before auto-merge is enabled, the system should have helper behavior for at leas
 - **inspect PR state** including checks, reviews, mergeability, and current head SHA
 - **merge-if-head-matches** so a stale review cannot merge a newer commit by accident
 
+Passive polling should use the PR-inspection helper to refresh live gates (`checks`, `human_approval`, `mergeability`) and may safely promote `waiting_for_checks` into `waiting_for_human` or `ready_to_merge` without reopening implementation work.
+
 These can start as worker-facing helper tools or Pi extensions. They do not need to be orchestrator-native on day one, but they should become runtime-enforced invariants before full merge automation.
 
 ## 10. Failure recovery model

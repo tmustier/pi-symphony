@@ -99,7 +99,16 @@ defmodule SymphonyElixir.OrchestrationPolicy do
       waiting_reason:
         workpad.waiting_reason ||
           default_waiting_reason(passive_phase, settings.rollout.mode, ownership, kill_switch),
-      next_intended_action: next_intended_action(passive_phase, base_dispatch_allowed, dispatch_allowed, settings.rollout.mode, ownership, kill_switch),
+      next_intended_action:
+        preferred_next_intended_action(
+          workpad.observation,
+          passive_phase,
+          base_dispatch_allowed,
+          dispatch_allowed,
+          settings.rollout.mode,
+          ownership,
+          kill_switch
+        ),
       ownership: ownership,
       kill_switch: kill_switch,
       workpad: workpad
@@ -353,6 +362,24 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     end
   end
 
+  defp preferred_next_intended_action(observation, passive_phase, base_dispatch_allowed, dispatch_allowed, rollout_mode, ownership, kill_switch) do
+    computed =
+      next_intended_action(
+        passive_phase,
+        base_dispatch_allowed,
+        dispatch_allowed,
+        rollout_mode,
+        ownership,
+        kill_switch
+      )
+
+    if base_dispatch_allowed and passive_phase do
+      fetch_value(observation, :next_intended_action) || computed
+    else
+      computed
+    end
+  end
+
   defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, ownership, kill_switch) do
     cond do
       not ownership.allowed -> "await_ownership"
@@ -373,6 +400,15 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   defp default_waiting_reason(true, _rollout_mode, _ownership, _kill_switch), do: nil
   defp default_waiting_reason(false, "observe", _ownership, _kill_switch), do: "observe_only"
   defp default_waiting_reason(_passive_phase, _rollout_mode, _ownership, _kill_switch), do: nil
+
+  defp fetch_value(map, key) when is_map(map) and is_atom(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, Atom.to_string(key))
+    end
+  end
+
+  defp fetch_value(_map, _key), do: nil
 
   defp comment_field(comment, field) when is_map(comment) and is_atom(field) do
     Map.get(comment, field) || Map.get(comment, Atom.to_string(field))

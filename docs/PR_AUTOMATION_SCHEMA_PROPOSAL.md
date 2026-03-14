@@ -437,6 +437,8 @@ Before full merge automation, introduce helper operations for at least:
 - `inspect_pr_state`
 - `merge_if_head_matches`
 
+`inspect_pr_state` should be usable during passive polling from persisted PR metadata alone (for example by recovering repo context from the PR URL) so the runtime can refresh gate summaries and passive phase transitions without requiring a fresh worker run.
+
 These can begin as worker-facing helper tools or Pi extensions. They do not need to be orchestrator-native immediately, but they should become runtime-enforced before unattended merge is turned on.
 
 ### 10.3 Review pass accounting
