@@ -2010,7 +2010,10 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
                  tracker_module: Memory
                )
 
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
       assert updated_issue.state == "Done"
+      assert runtime.workpad.metadata["merge"]["last_merge_commit_sha"] == "merge792"
       assert_receive {:memory_tracker_state_update, "issue-merge-already-done", "Done"}
     after
       if is_nil(previous_memory_issues),

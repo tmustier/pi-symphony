@@ -628,7 +628,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp merge_commit_sha({:ok, details}), do: Map.get(details, :merge_commit_sha)
-  defp merge_commit_sha(_merge_result), do: nil
+
+  defp merge_commit_sha(merge_result) do
+    case merge_result_pr_state(merge_result) do
+      %{} = pr_state -> Map.get(pr_state, :merge_commit_sha)
+      _ -> nil
+    end
+  end
 
   defp merge_failure_reason({:skip, %{reason: reason}}) when is_atom(reason), do: Atom.to_string(reason)
   defp merge_failure_reason(_merge_result), do: nil
