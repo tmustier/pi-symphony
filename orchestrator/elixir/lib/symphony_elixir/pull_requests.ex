@@ -6,11 +6,16 @@ defmodule SymphonyElixir.PullRequests do
   alias SymphonyElixir.{Config, Linear.Issue}
 
   @type pr_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
+  @type pr_state_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
   @type review_comment_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
 
   @doc false
   @spec resolve_or_create_for_test(Issue.t(), map(), keyword()) :: pr_result()
   def resolve_or_create_for_test(issue, git_state, opts \\ []), do: resolve_or_create(issue, git_state, opts)
+
+  @doc false
+  @spec inspect_state_for_test(map(), keyword()) :: pr_state_result()
+  def inspect_state_for_test(pr_context, opts \\ []), do: inspect_state(pr_context, opts)
 
   @doc false
   @spec upsert_review_comment_for_test(map(), String.t(), keyword()) :: review_comment_result()
@@ -33,6 +38,21 @@ defmodule SymphonyElixir.PullRequests do
         with {:ok, prs} <- list_branch_pull_requests(context.repo_slug, context.branch, context.base_branch, runner) do
           resolve_from_existing_prs(issue, context, prs, settings, runner)
         end
+    end
+  end
+
+  @spec inspect_state(map(), keyword()) :: pr_state_result()
+  def inspect_state(pr_context, opts \\ []) when is_map(pr_context) and is_list(opts) do
+    settings = Keyword.get(opts, :settings, Config.settings!())
+    runner = Keyword.get(opts, :runner, command_runner())
+    context = inspect_pr_context(pr_context, settings, opts)
+
+    case inspect_pr_skip_result(context) do
+      nil ->
+        inspect_pull_request_state(context, runner)
+
+      result ->
+        {:skip, result}
     end
   end
 
@@ -202,6 +222,39 @@ defmodule SymphonyElixir.PullRequests do
     end
   end
 
+  defp inspect_pr_skip_result(context) do
+    cond do
+      is_nil(context.repo_slug) ->
+        %{reason: :missing_repo_slug, next_intended_action: "record_repo_context"}
+
+      is_nil(context.pr_number) ->
+        %{reason: :missing_pr_number, next_intended_action: "record_pr_context"}
+
+      true ->
+        nil
+    end
+  end
+
+  defp inspect_pull_request_state(context, runner) do
+    args = [
+      "pr",
+      "view",
+      Integer.to_string(context.pr_number),
+      "--repo",
+      context.repo_slug,
+      "--json",
+      "number,url,state,isDraft,headRefName,headRefOid,baseRefName,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup"
+    ]
+
+    with {:ok, output} <- runner.("gh", args, []),
+         {:ok, pr} <- Jason.decode(output) do
+      {:ok, normalize_inspected_pull_request(pr)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_pr_view_response}
+    end
+  end
+
   defp upsert_review_comment_body(context, body, runner) do
     with {:ok, existing_comment} <- find_existing_review_comment(context, runner) do
       case existing_comment do
@@ -344,17 +397,32 @@ defmodule SymphonyElixir.PullRequests do
     }
   end
 
-  defp review_comment_context(pr_context, settings, opts) do
+  defp inspect_pr_context(pr_context, settings, opts) do
+    url = pick_optional_string([Map.get(pr_context, :url), Map.get(pr_context, "url")])
+
     %{
       pr_number: normalize_optional_integer(Map.get(pr_context, :number) || Map.get(pr_context, "number")),
       repo_slug:
         pick_optional_string([
           Keyword.get(opts, :repo_slug),
           Map.get(pr_context, :repo_slug),
-          Map.get(pr_context, "repo_slug")
+          Map.get(pr_context, "repo_slug"),
+          repo_slug_from_pr_url(url)
         ]),
-      comment_id: normalize_optional_integer(Keyword.get(opts, :comment_id) || Map.get(pr_context, :comment_id) || Map.get(pr_context, "comment_id")),
+      url: url,
       marker: pick_optional_string([settings.pr.review_comment_marker]) || "<!-- symphony-review -->"
+    }
+  end
+
+  defp review_comment_context(pr_context, settings, opts) do
+    inspect_context = inspect_pr_context(pr_context, settings, opts)
+
+    %{
+      pr_number: inspect_context.pr_number,
+      repo_slug: inspect_context.repo_slug,
+      url: inspect_context.url,
+      comment_id: normalize_optional_integer(Keyword.get(opts, :comment_id) || Map.get(pr_context, :comment_id) || Map.get(pr_context, "comment_id")),
+      marker: inspect_context.marker
     }
   end
 
@@ -455,6 +523,82 @@ defmodule SymphonyElixir.PullRequests do
     }
   end
 
+  defp normalize_inspected_pull_request(%{} = pr) do
+    checks = normalize_status_check_rollup(pr["statusCheckRollup"])
+
+    %{
+      number: pr["number"],
+      url: pr["url"],
+      state: pr["state"],
+      draft?: pr["isDraft"] == true,
+      head_branch: pr["headRefName"],
+      head_sha: pr["headRefOid"],
+      base_branch: pr["baseRefName"],
+      merge_state_status: pick_optional_string([pr["mergeStateStatus"]]),
+      mergeable: pick_optional_string([pr["mergeable"]]),
+      review_decision: pick_optional_string([pr["reviewDecision"]]),
+      checks: checks
+    }
+  end
+
+  defp normalize_status_check_rollup(status_check_rollup) when is_list(status_check_rollup) do
+    counts =
+      Enum.reduce(status_check_rollup, %{total: 0, passing: 0, pending: 0, failing: 0}, fn item, acc ->
+        case classify_status_check(item) do
+          :passing -> %{acc | total: acc.total + 1, passing: acc.passing + 1}
+          :pending -> %{acc | total: acc.total + 1, pending: acc.pending + 1}
+          :failing -> %{acc | total: acc.total + 1, failing: acc.failing + 1}
+        end
+      end)
+
+    state =
+      cond do
+        counts.failing > 0 -> "fail"
+        counts.pending > 0 -> "pending"
+        true -> "pass"
+      end
+
+    Map.put(counts, :state, state)
+  end
+
+  defp normalize_status_check_rollup(_status_check_rollup) do
+    %{total: 0, passing: 0, pending: 0, failing: 0, state: "pass"}
+  end
+
+  defp classify_status_check(%{} = item) do
+    status = pick_optional_string([item["status"], item["state"]]) |> to_status_token()
+    conclusion = pick_optional_string([item["conclusion"]]) |> to_status_token()
+
+    cond do
+      status in ["QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "EXPECTED", "WAITING"] ->
+        :pending
+
+      conclusion in ["SUCCESS", "NEUTRAL", "SKIPPED"] ->
+        :passing
+
+      conclusion in ["FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "STALE", "ACTION_REQUIRED", "ERROR"] ->
+        :failing
+
+      status in ["SUCCESS", "NEUTRAL", "SKIPPED"] ->
+        :passing
+
+      status in ["FAILURE", "ERROR"] ->
+        :failing
+
+      status == "COMPLETED" and conclusion == nil ->
+        :pending
+
+      true ->
+        :pending
+    end
+  end
+
+  defp classify_status_check(_item), do: :pending
+
+  defp to_status_token(nil), do: nil
+  defp to_status_token(value) when is_binary(value), do: String.upcase(String.trim(value))
+  defp to_status_token(_value), do: nil
+
   defp normalize_issue_comment(%{} = comment) do
     %{
       id: normalize_optional_integer(comment["id"]),
@@ -531,6 +675,21 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp normalize_optional_integer(_value), do: nil
+
+  defp repo_slug_from_pr_url(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{host: host, path: path} when host in ["github.com", "www.github.com"] and is_binary(path) ->
+        case String.split(String.trim_leading(path, "/"), "/", trim: true) do
+          [owner, repo, "pull", _number | _rest] -> "#{owner}/#{repo}"
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp repo_slug_from_pr_url(_url), do: nil
 
   defp pick_optional_string(values) when is_list(values) do
     Enum.find_value(values, fn
