@@ -13,10 +13,11 @@ We are starting from the architecture and implementation shape of OpenAI's Symph
 - keep a long-running orchestrator service
 - keep repo-owned `WORKFLOW.md` configuration and prompt policy
 - make orchestration policy explicit in workflow config (`orchestration`, `rollout`, `pr`, `review`, `merge`) and expose it to worker prompts
-- keep a durable machine-readable Symphony workpad comment on tracker issues for phase / branch / PR recovery
+- keep a durable machine-readable Symphony workpad comment on tracker issues for phase / branch / PR / review recovery
 - keep per-issue isolated workspaces
 - replace Codex app-server workers with Pi workers running over Pi RPC
 - add Pi extensions inside worker sessions for workspace safety, tracker operations, and proof-of-work capture
+- persist self-review artifacts from the workspace into a single durable PR review comment with head-keyed review metadata
 
 ## Why this repo exists
 

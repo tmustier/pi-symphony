@@ -141,6 +141,10 @@ Notes:
   and records branch / PR lifecycle metadata there for durable resumption.
 - After a successful run, Symphony can inspect the workspace git branch and create, reopen, or
   reuse the matching branch PR when rollout + PR policy allow it.
+- When `review.enabled` is true and the worker writes structured review output to
+  `.symphony/review.md` with a leading `<!-- symphony-review-head: <sha> -->` line, Symphony
+  upserts the durable PR review comment and persists review comment identity plus head-keyed
+  pass metadata in the workpad.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run

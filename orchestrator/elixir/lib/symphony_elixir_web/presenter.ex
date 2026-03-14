@@ -231,6 +231,9 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp tracked_workpad_payload(workpad) when is_map(workpad) do
+    metadata = fetch_value(workpad, :metadata) || %{}
+    observation = fetch_value(workpad, :observation) || %{}
+
     %{}
     |> maybe_put(:marker, fetch_value(workpad, :marker))
     |> maybe_put(:marker_found, fetch_value(workpad, :marker_found))
@@ -239,9 +242,69 @@ defmodule SymphonyElixirWeb.Presenter do
     |> maybe_put(:metadata_status, fetch_value(workpad, :metadata_status))
     |> maybe_put(:phase_source, fetch_value(workpad, :phase_source))
     |> maybe_put(:waiting_reason, fetch_value(workpad, :waiting_reason))
+    |> maybe_put(:pr, tracked_pr_metadata(metadata))
+    |> maybe_put(:review, tracked_review_metadata(metadata))
+    |> maybe_put(:observation, tracked_observation_metadata(observation))
   end
 
   defp tracked_workpad_payload(_workpad), do: %{}
+
+  defp tracked_pr_metadata(metadata) when is_map(metadata) do
+    metadata
+    |> Map.get("pr", %{})
+    |> case do
+      %{} = pr ->
+        %{}
+        |> maybe_put(:number, pr["number"])
+        |> maybe_put(:url, pr["url"])
+        |> maybe_put(:head_sha, pr["head_sha"])
+        |> case do
+          payload when map_size(payload) == 0 -> nil
+          payload -> payload
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp tracked_pr_metadata(_metadata), do: nil
+
+  defp tracked_review_metadata(metadata) when is_map(metadata) do
+    metadata
+    |> Map.get("review", %{})
+    |> case do
+      %{} = review ->
+        %{}
+        |> maybe_put(:comment_id, review["comment_id"])
+        |> maybe_put(:passes_completed, review["passes_completed"])
+        |> maybe_put(:last_reviewed_head_sha, review["last_reviewed_head_sha"])
+        |> maybe_put(:last_fixed_head_sha, review["last_fixed_head_sha"])
+        |> case do
+          payload when map_size(payload) == 0 -> nil
+          payload -> payload
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp tracked_review_metadata(_metadata), do: nil
+
+  defp tracked_observation_metadata(observation) when is_map(observation) do
+    %{}
+    |> maybe_put(:last_observed_at, observation["last_observed_at"])
+    |> maybe_put(:next_intended_action, observation["next_intended_action"])
+    |> maybe_put(:rollout_mode, observation["rollout_mode"])
+    |> maybe_put(:gates, observation["gates"])
+    |> case do
+      payload when map_size(payload) == 0 -> nil
+      payload -> payload
+    end
+  end
+
+  defp tracked_observation_metadata(_observation), do: nil
 
   defp fetch_value(map, key) when is_map(map) and is_atom(key) do
     case Map.fetch(map, key) do

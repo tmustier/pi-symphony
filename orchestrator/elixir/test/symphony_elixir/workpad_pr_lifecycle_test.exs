@@ -217,6 +217,697 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     assert details.next_intended_action == "push_new_branch_for_followup"
   end
 
+  test "review artifact loads the canonical workspace review file" do
+    workspace = Path.join(System.tmp_dir!(), "symphony-review-artifact-#{System.unique_integer([:positive])}")
+    artifact_path = ReviewArtifact.path_for_test(workspace)
+
+    try do
+      File.mkdir_p!(Path.dirname(artifact_path))
+      File.write!(artifact_path, "<!-- symphony-review-head: abc123 -->\n\n### Findings\n\n- none\n")
+
+      assert {:ok, artifact} = ReviewArtifact.load_for_test(workspace)
+      assert artifact.path == artifact_path
+      assert artifact.reviewed_head_sha == "abc123"
+      assert artifact.body == "### Findings\n\n- none"
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "pull requests upsert review comments by marker" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      pr_review_comment_mode: "upsert"
+    )
+
+    Process.put(:github_runner_results, [
+      {:ok,
+       Jason.encode!([
+         %{
+           "id" => 321,
+           "body" => "<!-- symphony-review -->\n\nPrevious review",
+           "html_url" => "https://github.com/acme/widgets/pull/77#issuecomment-321"
+         }
+       ])},
+      {:ok,
+       Jason.encode!(%{
+         "id" => 321,
+         "body" => "<!-- symphony-review -->\n\nUpdated review",
+         "html_url" => "https://github.com/acme/widgets/pull/77#issuecomment-321"
+       })}
+    ])
+
+    runner = fn command, args, _opts ->
+      send(self(), {:github_command, command, args})
+
+      case Process.get(:github_runner_results) do
+        [result | rest] ->
+          Process.put(:github_runner_results, rest)
+          result
+
+        _ ->
+          {:error, :no_github_result}
+      end
+    end
+
+    assert {:ok, result} =
+             PullRequests.upsert_review_comment_for_test(
+               %{number: 77, repo_slug: "acme/widgets"},
+               "Updated review",
+               runner: runner
+             )
+
+    assert result.action == :updated
+    assert result.comment_id == 321
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/77/comments?per_page=100&page=1"]}
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/comments/321", "--method", "PATCH", "-f", body_arg]}
+    assert String.contains?(body_arg, "body=<!-- symphony-review -->")
+  end
+
+  test "pull requests paginate marker lookup when the durable review comment is beyond the first page" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      pr_review_comment_mode: "upsert"
+    )
+
+    first_page =
+      Enum.map(1..100, fn index ->
+        %{
+          "id" => index,
+          "body" => "Regular comment #{index}",
+          "html_url" => "https://github.com/acme/widgets/pull/77#issuecomment-#{index}"
+        }
+      end)
+
+    Process.put(:github_runner_results, [
+      {:ok, Jason.encode!(first_page)},
+      {:ok,
+       Jason.encode!([
+         %{
+           "id" => 321,
+           "body" => "<!-- symphony-review -->\n\nPrevious review",
+           "html_url" => "https://github.com/acme/widgets/pull/77#issuecomment-321"
+         }
+       ])},
+      {:ok,
+       Jason.encode!(%{
+         "id" => 321,
+         "body" => "<!-- symphony-review -->\n\nUpdated review",
+         "html_url" => "https://github.com/acme/widgets/pull/77#issuecomment-321"
+       })}
+    ])
+
+    runner = fn command, args, _opts ->
+      send(self(), {:github_command, command, args})
+
+      case Process.get(:github_runner_results) do
+        [result | rest] ->
+          Process.put(:github_runner_results, rest)
+          result
+
+        _ ->
+          {:error, :no_github_result}
+      end
+    end
+
+    assert {:ok, result} =
+             PullRequests.upsert_review_comment_for_test(
+               %{number: 77, repo_slug: "acme/widgets"},
+               "Updated review",
+               runner: runner
+             )
+
+    assert result.action == :updated
+    assert result.comment_id == 321
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/77/comments?per_page=100&page=1"]}
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/77/comments?per_page=100&page=2"]}
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/comments/321", "--method", "PATCH", "-f", _body_arg]}
+  end
+
+  test "post-run lifecycle persists review comment metadata from workspace artifacts" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-review-persistence-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    review_path = ReviewArtifact.path_for_test(repo)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    issue = %Issue{
+      id: "issue-review-persistence",
+      identifier: "MT-704V",
+      state: "In Review",
+      title: "Persist review metadata",
+      description: "Upsert review comment after a successful run",
+      url: "https://example.org/issues/MT-704V",
+      branch_name: "feature/review-persistence",
+      labels: ["symphony"],
+      comments: []
+    }
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/review-persistence", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# review persistence\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-persistence"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      File.mkdir_p!(Path.dirname(review_path))
+      File.write!(review_path, "<!-- symphony-review-head: #{String.trim(head_sha)} -->\n\n### Findings\n\n- No actionable issues found.")
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok, "[]"},
+        {:ok, "https://github.com/acme/widgets/pull/88\n"},
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 88,
+             "url" => "https://github.com/acme/widgets/pull/88",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-persistence",
+             "headRefOid" => String.trim(head_sha),
+             "baseRefName" => "main"
+           }
+         ])},
+        {:ok, "[]"},
+        {:ok,
+         Jason.encode!(%{
+           "id" => 444,
+           "body" => "<!-- symphony-review -->\n\n### Findings\n\n- No actionable issues found.",
+           "html_url" => "https://github.com/acme/widgets/pull/88#issuecomment-444"
+         })}
+      ])
+
+      runner = fn command, args, _opts ->
+        send(self(), {:github_command, command, args})
+
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-persistence"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-persistence",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.phase == "waiting_for_checks"
+      assert runtime.workpad.metadata["review"]["comment_id"] == 444
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 1
+      assert runtime.workpad.metadata["review"]["last_reviewed_head_sha"] == String.trim(head_sha)
+      assert runtime.workpad.metadata["observation"]["gates"]["review"] == "persisted"
+      assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/88/comments?per_page=100&page=1"]}
+      assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/88/comments", "--method", "POST", "-f", _body]}
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle does not increment persisted review passes for the same head" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-review-same-head-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    review_path = ReviewArtifact.path_for_test(repo)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/review-same-head", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# review same head\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-same-head"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      trimmed_head_sha = String.trim(head_sha)
+      File.mkdir_p!(Path.dirname(review_path))
+      File.write!(review_path, "<!-- symphony-review-head: #{trimmed_head_sha} -->\n\n### Findings\n\n- Updated wording only.")
+
+      issue = %Issue{
+        id: "issue-review-same-head",
+        identifier: "MT-704X",
+        state: "In Review",
+        title: "Do not double count review passes",
+        description: "Same-head comment refreshes should not increment passes",
+        url: "https://example.org/issues/MT-704X",
+        branch_name: "feature/review-same-head",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body:
+              "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/review-same-head\n  pr:\n    number: 90\n    url: https://github.com/acme/widgets/pull/90\n    head_sha: #{trimmed_head_sha}\n  review:\n    comment_id: 555\n    passes_completed: 1\n    last_reviewed_head_sha: #{trimmed_head_sha}\n    last_fixed_head_sha: null\n```",
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 90,
+             "url" => "https://github.com/acme/widgets/pull/90",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-same-head",
+             "headRefOid" => trimmed_head_sha,
+             "baseRefName" => "main"
+           }
+         ])},
+        {:ok,
+         Jason.encode!(%{
+           "id" => 555,
+           "body" => "<!-- symphony-review -->\n\nOld review",
+           "html_url" => "https://github.com/acme/widgets/pull/90#issuecomment-555"
+         })},
+        {:ok,
+         Jason.encode!(%{
+           "id" => 555,
+           "body" => "<!-- symphony-review -->\n\n### Findings\n\n- Updated wording only.",
+           "html_url" => "https://github.com/acme/widgets/pull/90#issuecomment-555"
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-same-head"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-same-head",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.workpad.metadata["review"]["comment_id"] == 555
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 1
+      assert runtime.workpad.metadata["review"]["last_reviewed_head_sha"] == trimmed_head_sha
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle keeps the issue in reviewing when the review artifact head is stale" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-review-stale-artifact-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    review_path = ReviewArtifact.path_for_test(repo)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    issue = %Issue{
+      id: "issue-review-stale-artifact",
+      identifier: "MT-704Z",
+      state: "In Progress",
+      title: "Ignore stale review artifacts",
+      description: "Do not count an old review file for a new head",
+      url: "https://example.org/issues/MT-704Z",
+      branch_name: "feature/review-stale-artifact",
+      labels: ["symphony"],
+      comments: []
+    }
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/review-stale-artifact", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# review stale artifact\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-stale-artifact"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      File.mkdir_p!(Path.dirname(review_path))
+      File.write!(review_path, "<!-- symphony-review-head: stale123 -->\n\n### Findings\n\n- Stale review output.")
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok, "[]"},
+        {:ok, "https://github.com/acme/widgets/pull/92\n"},
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 92,
+             "url" => "https://github.com/acme/widgets/pull/92",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-stale-artifact",
+             "headRefOid" => String.trim(head_sha),
+             "baseRefName" => "main"
+           }
+         ])}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-stale-artifact"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-stale-artifact",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.phase == "reviewing"
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 0
+      assert runtime.workpad.metadata["observation"]["gates"]["review"] == "stale"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "rerun_review_for_current_head"
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle marks review continuity as missing when the current head sha is unavailable" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    issue = %Issue{
+      id: "issue-review-head-missing",
+      identifier: "MT-704Y",
+      state: "In Review",
+      title: "Handle missing head continuity",
+      description: "Review gates should not report current without a known head",
+      url: "https://example.org/issues/MT-704Y",
+      branch_name: "feature/review-head-missing",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/review-head-missing\n  pr:\n    number: 91\n    url: https://github.com/acme/widgets/pull/91\n    head_sha: null\n  review:\n    comment_id: 555\n    passes_completed: 1\n    last_reviewed_head_sha: abc123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 91,
+             "url" => "https://github.com/acme/widgets/pull/91",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-head-missing",
+             "headRefOid" => nil,
+             "baseRefName" => "main"
+           }
+         ])}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-head-missing"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-head-missing",
+                 %{workspace_path: nil, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.workpad.metadata["observation"]["gates"]["review"] == "missing"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle keeps the issue in reviewing when review comment persistence fails" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-review-failure-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    review_path = ReviewArtifact.path_for_test(repo)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    issue = %Issue{
+      id: "issue-review-failure",
+      identifier: "MT-704W",
+      state: "In Progress",
+      title: "Handle review upsert failures",
+      description: "Stay in reviewing until the comment is persisted",
+      url: "https://example.org/issues/MT-704W",
+      branch_name: "feature/review-failure",
+      labels: ["symphony"],
+      comments: []
+    }
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/review-failure", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# review failure\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-failure"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      File.mkdir_p!(Path.dirname(review_path))
+      File.write!(review_path, "<!-- symphony-review-head: #{String.trim(head_sha)} -->\n\n### Findings\n\n- Please persist this review.")
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok, "[]"},
+        {:ok, "https://github.com/acme/widgets/pull/89\n"},
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 89,
+             "url" => "https://github.com/acme/widgets/pull/89",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-failure",
+             "headRefOid" => String.trim(head_sha),
+             "baseRefName" => "main"
+           }
+         ])},
+        {:error, {1, "boom"}}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-failure"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-failure",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.phase == "reviewing"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "repair_review_comment_persistence"
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 0
+      assert runtime.workpad.metadata["observation"]["gates"]["review"] == "tool_unavailable"
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "workpad sync recovers ambiguous duplicate comments by archiving extras" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)

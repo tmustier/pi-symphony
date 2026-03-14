@@ -448,6 +448,7 @@ Recommended rule:
 - a review pass counts only after its result is successfully persisted
 - pass accounting is keyed to the reviewed head SHA
 - if a new commit appears, the old review result is no longer sufficient for merge
+- the worker writes the structured review artifact to `.symphony/review.md` with a leading `<!-- symphony-review-head: <sha> -->` line, which the runtime uses as the canonical source for durable review comment upsert
 
 ## 11. Canonical structured reviewer contract
 

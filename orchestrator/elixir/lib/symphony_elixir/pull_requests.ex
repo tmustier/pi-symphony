@@ -6,10 +6,15 @@ defmodule SymphonyElixir.PullRequests do
   alias SymphonyElixir.{Config, Linear.Issue}
 
   @type pr_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
+  @type review_comment_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
 
   @doc false
   @spec resolve_or_create_for_test(Issue.t(), map(), keyword()) :: pr_result()
   def resolve_or_create_for_test(issue, git_state, opts \\ []), do: resolve_or_create(issue, git_state, opts)
+
+  @doc false
+  @spec upsert_review_comment_for_test(map(), String.t(), keyword()) :: review_comment_result()
+  def upsert_review_comment_for_test(pr_context, body, opts \\ []), do: upsert_review_comment(pr_context, body, opts)
 
   @spec resolve_or_create(Issue.t(), map(), keyword()) :: pr_result()
   def resolve_or_create(%Issue{} = issue, git_state, opts \\ []) when is_map(git_state) and is_list(opts) do
@@ -30,6 +35,64 @@ defmodule SymphonyElixir.PullRequests do
         end
     end
   end
+
+  @spec upsert_review_comment(map(), String.t(), keyword()) :: review_comment_result()
+  def upsert_review_comment(pr_context, body, opts \\ []) when is_map(pr_context) and is_binary(body) and is_list(opts) do
+    settings = Keyword.get(opts, :settings, Config.settings!())
+    runner = Keyword.get(opts, :runner, command_runner())
+    context = review_comment_context(pr_context, settings, opts)
+    normalized_body = normalize_review_comment_body(body, context.marker)
+
+    case review_comment_skip_result(context, settings, normalized_body) do
+      nil ->
+        if settings.pr.review_comment_mode == "create" do
+          create_review_comment(context, normalized_body, runner)
+        else
+          upsert_review_comment_body(context, normalized_body, runner)
+        end
+
+      result ->
+        {:skip, result}
+    end
+  end
+
+  defp review_comment_skip_result(context, settings, normalized_body) do
+    review_comment_mode_skip(settings) ||
+      review_comment_mutation_skip(settings) ||
+      review_comment_context_skip(context) ||
+      review_comment_body_skip(normalized_body)
+  end
+
+  defp review_comment_mode_skip(settings) do
+    if settings.pr.review_comment_mode == "off" do
+      %{reason: :review_comment_mode_off, next_intended_action: "enable_review_comment_mode"}
+    end
+  end
+
+  defp review_comment_mutation_skip(settings) do
+    if settings.rollout.mode not in ["mutate", "merge"] do
+      %{reason: :observe_only, next_intended_action: "upsert_review_comment_when_mutations_enabled"}
+    end
+  end
+
+  defp review_comment_context_skip(context) do
+    cond do
+      is_nil(context.repo_slug) ->
+        %{reason: :missing_repo_slug, next_intended_action: "record_repo_context"}
+
+      is_nil(context.pr_number) ->
+        %{reason: :missing_pr_number, next_intended_action: "record_pr_context"}
+
+      true ->
+        nil
+    end
+  end
+
+  defp review_comment_body_skip(nil) do
+    %{reason: :missing_review_body, next_intended_action: "persist_review_artifact"}
+  end
+
+  defp review_comment_body_skip(_normalized_body), do: nil
 
   defp resolve_from_existing_prs(issue, context, prs, settings, runner) do
     open_pr = Enum.find(prs, &(&1.state == "OPEN"))
@@ -139,6 +202,128 @@ defmodule SymphonyElixir.PullRequests do
     end
   end
 
+  defp upsert_review_comment_body(context, body, runner) do
+    with {:ok, existing_comment} <- find_existing_review_comment(context, runner) do
+      case existing_comment do
+        %{} = comment -> update_review_comment(comment.id, context, body, runner)
+        nil -> create_review_comment(context, body, runner)
+      end
+    end
+  end
+
+  defp create_review_comment(context, body, runner) do
+    with {:ok, comment} <- create_issue_comment(context.repo_slug, context.pr_number, body, runner) do
+      {:ok, %{action: :created, comment_id: comment.id, url: comment.url, body: comment.body}}
+    end
+  end
+
+  defp update_review_comment(comment_id, context, body, runner) do
+    with {:ok, comment} <- update_issue_comment(context.repo_slug, comment_id, body, runner) do
+      {:ok, %{action: :updated, comment_id: comment.id, url: comment.url, body: comment.body}}
+    end
+  end
+
+  defp find_existing_review_comment(context, runner) do
+    with {:ok, direct_match} <- fetch_issue_comment_by_id(context, runner),
+         {:ok, marker_match} <- fetch_issue_comment_by_marker(context, runner, direct_match) do
+      {:ok, direct_match || marker_match}
+    end
+  end
+
+  defp fetch_issue_comment_by_id(%{comment_id: comment_id} = context, runner) when is_integer(comment_id) do
+    case fetch_issue_comment(context.repo_slug, comment_id, runner) do
+      {:ok, comment} -> {:ok, comment}
+      {:error, reason} when reason in [:issue_comment_not_found, {404, ""}] -> {:ok, nil}
+      {:error, {404, _output}} -> {:ok, nil}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fetch_issue_comment_by_id(_context, _runner), do: {:ok, nil}
+
+  defp fetch_issue_comment_by_marker(_context, _runner, %{} = direct_match), do: {:ok, direct_match}
+
+  defp fetch_issue_comment_by_marker(context, runner, _direct_match) do
+    with {:ok, comments} <- list_issue_comments(context.repo_slug, context.pr_number, runner) do
+      {:ok,
+       Enum.find(comments, fn comment ->
+         is_binary(comment.body) and String.contains?(comment.body, context.marker)
+       end)}
+    end
+  end
+
+  defp fetch_issue_comment(repo_slug, comment_id, runner)
+       when is_binary(repo_slug) and is_integer(comment_id) and is_function(runner, 3) do
+    args = ["api", "repos/#{repo_slug}/issues/comments/#{comment_id}"]
+
+    with {:ok, output} <- runner.("gh", args, []),
+         {:ok, comment} <- Jason.decode(output) do
+      {:ok, normalize_issue_comment(comment)}
+    else
+      {:error, {404, _output}} -> {:error, :issue_comment_not_found}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_issue_comment_response}
+    end
+  end
+
+  defp list_issue_comments(repo_slug, pr_number, runner)
+       when is_binary(repo_slug) and is_integer(pr_number) and is_function(runner, 3) do
+    fetch_issue_comment_pages(repo_slug, pr_number, 1, [], runner)
+  end
+
+  defp fetch_issue_comment_pages(repo_slug, pr_number, page, acc, runner)
+       when is_binary(repo_slug) and is_integer(pr_number) and is_integer(page) and is_list(acc) and
+              is_function(runner, 3) do
+    with {:ok, comments} <- fetch_issue_comment_page(repo_slug, pr_number, page, runner) do
+      next_acc = acc ++ comments
+
+      if length(comments) < 100 do
+        {:ok, next_acc}
+      else
+        fetch_issue_comment_pages(repo_slug, pr_number, page + 1, next_acc, runner)
+      end
+    end
+  end
+
+  defp fetch_issue_comment_page(repo_slug, pr_number, page, runner)
+       when is_binary(repo_slug) and is_integer(pr_number) and is_integer(page) and is_function(runner, 3) do
+    args = ["api", "repos/#{repo_slug}/issues/#{pr_number}/comments?per_page=100&page=#{page}"]
+
+    with {:ok, output} <- runner.("gh", args, []),
+         {:ok, comments} <- Jason.decode(output) do
+      {:ok, Enum.map(comments, &normalize_issue_comment/1)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_issue_comment_list_response}
+    end
+  end
+
+  defp create_issue_comment(repo_slug, pr_number, body, runner)
+       when is_binary(repo_slug) and is_integer(pr_number) and is_binary(body) and is_function(runner, 3) do
+    args = ["api", "repos/#{repo_slug}/issues/#{pr_number}/comments", "--method", "POST", "-f", "body=#{body}"]
+
+    with {:ok, output} <- runner.("gh", args, []),
+         {:ok, comment} <- Jason.decode(output) do
+      {:ok, normalize_issue_comment(comment)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_issue_comment_response}
+    end
+  end
+
+  defp update_issue_comment(repo_slug, comment_id, body, runner)
+       when is_binary(repo_slug) and is_integer(comment_id) and is_binary(body) and is_function(runner, 3) do
+    args = ["api", "repos/#{repo_slug}/issues/comments/#{comment_id}", "--method", "PATCH", "-f", "body=#{body}"]
+
+    with {:ok, output} <- runner.("gh", args, []),
+         {:ok, comment} <- Jason.decode(output) do
+      {:ok, normalize_issue_comment(comment)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_issue_comment_response}
+    end
+  end
+
   defp skip_result(reason, context, next_intended_action, pr) do
     %{
       reason: reason,
@@ -156,6 +341,20 @@ defmodule SymphonyElixir.PullRequests do
       repo_slug: pick_optional_string([Keyword.get(opts, :repo_slug), Map.get(git_state, :repo_slug)]),
       base_branch: settings.pr.base_branch,
       remote_branch_published: Map.get(git_state, :remote_branch_published) == true
+    }
+  end
+
+  defp review_comment_context(pr_context, settings, opts) do
+    %{
+      pr_number: normalize_optional_integer(Map.get(pr_context, :number) || Map.get(pr_context, "number")),
+      repo_slug:
+        pick_optional_string([
+          Keyword.get(opts, :repo_slug),
+          Map.get(pr_context, :repo_slug),
+          Map.get(pr_context, "repo_slug")
+        ]),
+      comment_id: normalize_optional_integer(Keyword.get(opts, :comment_id) || Map.get(pr_context, :comment_id) || Map.get(pr_context, "comment_id")),
+      marker: pick_optional_string([settings.pr.review_comment_marker]) || "<!-- symphony-review -->"
     }
   end
 
@@ -256,6 +455,28 @@ defmodule SymphonyElixir.PullRequests do
     }
   end
 
+  defp normalize_issue_comment(%{} = comment) do
+    %{
+      id: normalize_optional_integer(comment["id"]),
+      url: comment["html_url"] || comment["url"],
+      body: comment["body"]
+    }
+  end
+
+  defp normalize_review_comment_body(body, marker) when is_binary(body) and is_binary(marker) do
+    case String.trim(body) do
+      "" ->
+        nil
+
+      normalized_body ->
+        if String.contains?(normalized_body, marker) do
+          normalized_body
+        else
+          [marker, "", normalized_body] |> Enum.join("\n")
+        end
+    end
+  end
+
   defp pull_request_title(%Issue{identifier: identifier, title: title}) do
     [pick_optional_string([identifier]), pick_optional_string([title])]
     |> Enum.reject(&is_nil/1)
@@ -299,6 +520,17 @@ defmodule SymphonyElixir.PullRequests do
         end
     end
   end
+
+  defp normalize_optional_integer(value) when is_integer(value), do: value
+
+  defp normalize_optional_integer(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {integer, ""} -> integer
+      _ -> nil
+    end
+  end
+
+  defp normalize_optional_integer(_value), do: nil
 
   defp pick_optional_string(values) when is_list(values) do
     Enum.find_value(values, fn
