@@ -758,8 +758,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp done_tracker_state(settings) do
     terminal_states = Enum.filter(settings.tracker.terminal_states, &is_binary/1)
 
-    find_preferred_terminal_state(terminal_states, ["done", "completed", "closed"]) ||
-      List.first(terminal_states)
+    pick_string([settings.merge.completion_state]) ||
+      find_preferred_terminal_state(terminal_states, ["done", "completed", "closed"])
   end
 
   defp find_preferred_terminal_state(terminal_states, preferred_states) do

@@ -1863,7 +1863,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
-      tracker_terminal_states: ["Completed"],
+      tracker_terminal_states: ["Resolved"],
       rollout_mode: "merge",
       orchestration_required_label: "symphony",
       orchestration_required_workpad_marker: "## Symphony Workpad",
@@ -1872,6 +1872,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_enabled: false,
       merge_mode: "auto",
       merge_method: "squash",
+      merge_completion_state: "Resolved",
       merge_approval_states: ["Merging"]
     )
 
@@ -1967,8 +1968,8 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
                  tracker_module: Memory
                )
 
-      assert updated_issue.state == "Completed"
-      assert_receive {:memory_tracker_state_update, "issue-merge-completed-state", "Completed"}
+      assert updated_issue.state == "Resolved"
+      assert_receive {:memory_tracker_state_update, "issue-merge-completed-state", "Resolved"}
     after
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),

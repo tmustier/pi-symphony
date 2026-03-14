@@ -239,6 +239,7 @@ Rule:
 - if merge policy requires human approval, the worker must **not** promote an issue into approval states such as `Merging` on its own
 - a human reviewer/operator is responsible for moving the ticket into the configured approval state
 - once the ticket is in an approved merge state, the worker may move from `ready_to_merge` to `merging` and execute the merge
+- if your tracker closes merged work under a non-`Done` state, configure `merge.completion_state` explicitly so post-merge reconciliation uses the correct terminal state
 
 This makes the human approval gate legible and avoids a hidden auto-approval path.
 

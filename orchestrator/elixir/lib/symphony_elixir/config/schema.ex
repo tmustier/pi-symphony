@@ -405,6 +405,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:require_head_match, :boolean, default: true)
       field(:require_human_approval, :boolean, default: true)
       field(:approval_states, {:array, :string}, default: [])
+      field(:completion_state, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -419,7 +420,8 @@ defmodule SymphonyElixir.Config.Schema do
           :require_green_checks,
           :require_head_match,
           :require_human_approval,
-          :approval_states
+          :approval_states,
+          :completion_state
         ],
         empty_values: []
       )
@@ -681,7 +683,8 @@ defmodule SymphonyElixir.Config.Schema do
       | mode: normalize_optional_string(settings.merge.mode) || "disabled",
         executor: normalize_optional_string(settings.merge.executor),
         method: normalize_optional_string(settings.merge.method) || "squash",
-        approval_states: normalize_string_list(settings.merge.approval_states)
+        approval_states: normalize_string_list(settings.merge.approval_states),
+        completion_state: normalize_optional_string(settings.merge.completion_state)
     }
 
     %{
@@ -935,7 +938,7 @@ defmodule SymphonyElixir.Config.Schema do
       {"rollout", ["mode", "preflight_required", "kill_switch_label", "kill_switch_file"]},
       {"pr", ["auto_create", "base_branch", "reuse_branch_pr", "closed_pr_policy", "attach_to_tracker", "required_labels", "review_comment_mode", "review_comment_marker"]},
       {"review", ["enabled", "agent", "output_format", "max_passes", "fix_consideration_severities"]},
-      {"merge", ["mode", "executor", "method", "require_green_checks", "require_head_match", "require_human_approval", "approval_states"]}
+      {"merge", ["mode", "executor", "method", "require_green_checks", "require_head_match", "require_human_approval", "approval_states", "completion_state"]}
     ]
 
     case Enum.find_value(checks, &unknown_key_error(config, &1)) do
