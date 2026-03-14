@@ -2206,6 +2206,118 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
+  test "post-run lifecycle polls pending merge confirmation without rerunning the merge command" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      review_enabled: false,
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_approval_states: ["Merging"]
+    )
+
+    issue = %Issue{
+      id: "issue-merge-confirmation-pending",
+      identifier: "MT-704MJ",
+      state: "Merging",
+      title: "Poll pending merge confirmation",
+      description: "Once merge is accepted, later cycles should only confirm completion",
+      url: "https://example.org/issues/MT-704MJ",
+      branch_name: "feature/merge-confirmation-pending",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: merging\n  branch: feature/merge-confirmation-pending\n  pr:\n    number: 113\n    url: https://github.com/acme/widgets/pull/113\n    head_sha: abc123\n  merge:\n    last_attempted_at: 2026-03-14T00:00:00Z\n    last_attempted_head_sha: abc123\n    last_merge_commit_sha: null\n    last_merged_head_sha: null\n    last_failure_reason: null\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 113,
+             "url" => "https://github.com/acme/widgets/pull/113",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/merge-confirmation-pending",
+             "headRefOid" => "abc123",
+             "baseRefName" => "main"
+           }
+         ])},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 113,
+           "url" => "https://github.com/acme/widgets/pull/113",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-confirmation-pending",
+           "headRefOid" => "abc123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "CLEAN",
+           "mergeable" => "MERGEABLE",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => nil
+         })}
+      ])
+
+      runner = fn command, args, _opts ->
+        send(self(), {:github_command, command, args})
+
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-merge-confirmation-pending"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-merge-confirmation-pending",
+                 %{workspace_path: nil, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      assert updated_issue.state == "Merging"
+      assert runtime.phase == "merging"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "confirm_merge_completion"
+      refute_receive {:github_command, "gh", ["pr", "merge" | _]}
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "post-run lifecycle preserves persisted PR metadata when merge lookup fails" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
@@ -2370,8 +2482,13 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
                  issue_fetcher: issue_fetcher
                )
 
-      assert updated_issue.state == "Done"
-      assert_receive {:memory_tracker_state_update, "issue-merge-before-approval", "Done"}
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      assert updated_issue.state == "In Review"
+      assert runtime.phase == "blocked"
+      assert runtime.waiting_reason == "human_approval_required"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "reconcile_merged_pr"
+      refute_receive {:memory_tracker_state_update, "issue-merge-before-approval", _state}
     after
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
@@ -2383,7 +2500,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
-  test "post-run lifecycle blocks open merges when the reviewed head is missing" do
+  test "post-run lifecycle sends open merges back to review when the reviewed head is missing" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
 
@@ -2481,9 +2598,9 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
 
       assert updated_issue.state == "Merging"
-      assert runtime.phase == "blocked"
-      assert runtime.waiting_reason == "missing_context"
-      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "record_expected_merge_head"
+      assert runtime.phase == "waiting_for_checks"
+      assert runtime.waiting_reason == "checks_pending"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "rerun_review_for_current_head"
     after
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),

@@ -427,6 +427,15 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     |> normalize_map()
   end
 
+  defp current_merge_metadata(runtime) do
+    runtime
+    |> fetch_value(:workpad)
+    |> fetch_value(:metadata)
+    |> normalize_map()
+    |> Map.get("merge", %{})
+    |> normalize_map()
+  end
+
   defp review_persistence_phase?(phase), do: phase in ["implementing", "reviewing", "rework"]
 
   defp merge_phase?(phase), do: phase in ["ready_to_merge", "merging"]
@@ -434,19 +443,78 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp maybe_merge_pull_request(issue, runtime, pr_result, opts, settings) do
     if merge_phase?(runtime.phase) do
       with {:ok, context} <- merge_pr_context(runtime, pr_result, opts, settings) do
-        execute_or_reconcile_merge(issue, context, opts, settings)
+        execute_or_reconcile_merge(issue, runtime, context, opts, settings)
       end
     else
       {:skip, %{reason: :merge_not_requested}}
     end
   end
 
-  defp execute_or_reconcile_merge(issue, context, opts, settings) do
-    if human_approval_ready?(issue, settings) do
-      PullRequests.merge_if_head_matches(context, Keyword.put(opts, :settings, settings))
-    else
-      merge_reconciliation_without_approval(context, opts, settings)
+  defp execute_or_reconcile_merge(issue, runtime, context, opts, settings) do
+    cond do
+      human_approval_ready?(issue, settings) != true ->
+        merge_reconciliation_without_approval(context, opts, settings)
+
+      awaiting_merge_confirmation?(runtime, context) ->
+        confirm_pending_merge(context, opts, settings)
+
+      true ->
+        PullRequests.merge_if_head_matches(context, Keyword.put(opts, :settings, settings))
     end
+  end
+
+  defp awaiting_merge_confirmation?(runtime, context) do
+    merge_metadata = current_merge_metadata(runtime)
+
+    merge_phase?(runtime.phase) and runtime.phase == "merging" and
+      pick_string([Map.get(merge_metadata, "last_attempted_head_sha")]) == context.expected_head_sha and
+      pick_string([Map.get(merge_metadata, "last_attempted_at")]) != nil and
+      pick_string([Map.get(merge_metadata, "last_failure_reason")]) == nil and
+      pick_string([Map.get(merge_metadata, "last_merged_head_sha")]) == nil
+  end
+
+  defp confirm_pending_merge(context, opts, settings) do
+    case PullRequests.inspect_state(context, Keyword.put(opts, :settings, settings)) do
+      {:ok, pr_state} -> {:skip, merge_skip_for_confirmation(pr_state, context)}
+      {:skip, _details} = skip -> skip
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp merge_skip_for_confirmation(%{state: "MERGED"} = pr_state, context) do
+    %{
+      reason: :already_merged,
+      next_intended_action: "reconcile_merged_pr",
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
+  end
+
+  defp merge_skip_for_confirmation(%{state: "CLOSED"} = pr_state, context) do
+    %{
+      reason: :pr_closed,
+      next_intended_action: "reconcile_closed_pr",
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
+  end
+
+  defp merge_skip_for_confirmation(%{draft?: true} = pr_state, context) do
+    %{
+      reason: :pr_draft,
+      next_intended_action: "resolve_pr_draft_state",
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
+  end
+
+  defp merge_skip_for_confirmation(pr_state, context) do
+    %{
+      reason: :merge_pending_confirmation,
+      next_intended_action: "confirm_merge_completion",
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
   end
 
   defp merge_reconciliation_without_approval(context, opts, settings) do
@@ -464,7 +532,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp merge_skip_for_unapproved_pr(%{state: "MERGED"} = pr_state, context) do
     %{
-      reason: :already_merged,
+      reason: :merged_without_human_approval,
       next_intended_action: "reconcile_merged_pr",
       expected_head_sha: context.expected_head_sha,
       pr_state: pr_state
@@ -564,6 +632,14 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp merge_skip_reason({:skip, %{reason: reason}}), do: reason
   defp merge_skip_reason(_merge_result), do: nil
 
+  defp merge_completion_pending_or_done?(merge_result) do
+    merge_successful?(merge_result) or
+      merge_already_completed?(merge_result) or
+      merge_skip_reason(merge_result) == :merge_pending_confirmation
+  end
+
+  defp merge_missing_context_reason?(reason), do: reason in [:missing_pr_number, :missing_repo_slug]
+
   defp merge_review_status(runtime, merge_result, settings) do
     case merge_result_pr_state(merge_result) do
       %{} = pr_state -> review_gate(runtime, %{head_sha: pr_state.head_sha}, nil, settings)
@@ -587,16 +663,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     pr_state = merge_result_pr_state(merge_result)
 
     cond do
-      merge_successful?(merge_result) or merge_already_completed?(merge_result) ->
-        "merging"
-
-      reason == :merge_pending_confirmation ->
+      merge_completion_pending_or_done?(merge_result) ->
         "merging"
 
       reason == :human_approval_required ->
         "waiting_for_human"
 
-      reason in [:missing_expected_head_sha, :missing_pr_number, :missing_repo_slug] ->
+      reason == :merged_without_human_approval or merge_missing_context_reason?(reason) ->
         "blocked"
 
       is_map(pr_state) ->
@@ -616,16 +689,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     pr_state = merge_result_pr_state(merge_result)
 
     cond do
-      merge_successful?(merge_result) or merge_already_completed?(merge_result) ->
+      merge_completion_pending_or_done?(merge_result) ->
         nil
 
-      reason == :merge_pending_confirmation ->
-        nil
-
-      reason == :human_approval_required ->
+      reason in [:human_approval_required, :merged_without_human_approval] ->
         "human_approval_required"
 
-      reason in [:missing_expected_head_sha, :missing_pr_number, :missing_repo_slug] ->
+      merge_missing_context_reason?(reason) ->
         "missing_context"
 
       is_map(pr_state) ->

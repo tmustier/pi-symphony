@@ -233,7 +233,13 @@ defmodule SymphonyElixir.PullRequests do
         nil
 
       is_nil(context.expected_head_sha) ->
-        {:skip, merge_skip(:missing_expected_head_sha, context, "record_expected_merge_head", pr_state)}
+        {:skip,
+         merge_skip(
+           :missing_expected_head_sha,
+           context,
+           missing_expected_head_action(settings),
+           pr_state
+         )}
 
       pr_state.head_sha != context.expected_head_sha ->
         {:skip, merge_skip(:head_mismatch, context, "rerun_review_for_current_head", pr_state)}
@@ -241,6 +247,10 @@ defmodule SymphonyElixir.PullRequests do
       true ->
         nil
     end
+  end
+
+  defp missing_expected_head_action(settings) do
+    if settings.review.enabled == true, do: "rerun_review_for_current_head", else: "record_expected_merge_head"
   end
 
   defp confirm_merged_state(%{state: "MERGED"}, _context), do: :ok
