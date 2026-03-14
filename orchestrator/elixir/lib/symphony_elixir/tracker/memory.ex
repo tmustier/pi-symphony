@@ -37,12 +37,50 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    persist_issues(fn issues ->
+      Enum.map(issues, fn
+        %Issue{id: ^issue_id, comments: comments} = issue when is_list(comments) ->
+          comment = %{id: generated_comment_id(), body: body, updated_at: now}
+          %{issue | comments: comments ++ [comment], updated_at: now}
+
+        %Issue{id: ^issue_id} = issue ->
+          comment = %{id: generated_comment_id(), body: body, updated_at: now}
+          %{issue | comments: [comment], updated_at: now}
+
+        issue ->
+          issue
+      end)
+    end)
+
     send_event({:memory_tracker_comment, issue_id, body})
+    :ok
+  end
+
+  @spec update_comment(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_comment(comment_id, body) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    persist_issues(fn issues ->
+      Enum.map(issues, &update_issue_comment(&1, comment_id, body, now))
+    end)
+
+    send_event({:memory_tracker_comment_update, comment_id, body})
     :ok
   end
 
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    persist_issues(fn issues ->
+      Enum.map(issues, fn
+        %Issue{id: ^issue_id} = issue -> %{issue | state: state_name, updated_at: now}
+        issue -> issue
+      end)
+    end)
+
     send_event({:memory_tracker_state_update, issue_id, state_name})
     :ok
   end
@@ -53,6 +91,29 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   defp issue_entries do
     Enum.filter(configured_issues(), &match?(%Issue{}, &1))
+  end
+
+  defp persist_issues(fun) when is_function(fun, 1) do
+    updated_issues = fun.(configured_issues())
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, updated_issues)
+    updated_issues
+  end
+
+  defp update_issue_comment(%Issue{comments: comments} = issue, comment_id, body, now)
+       when is_list(comments) do
+    updated_comments =
+      Enum.map(comments, fn
+        %{id: ^comment_id} = comment -> Map.merge(comment, %{body: body, updated_at: now})
+        comment -> comment
+      end)
+
+    %{issue | comments: updated_comments, updated_at: now}
+  end
+
+  defp update_issue_comment(issue, _comment_id, _body, _now), do: issue
+
+  defp generated_comment_id do
+    "memory-comment-#{System.unique_integer([:positive])}"
   end
 
   defp send_event(message) do

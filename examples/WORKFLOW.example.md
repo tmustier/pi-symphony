@@ -131,6 +131,6 @@ Operating rules:
 2. Respect `policy.*` and `issue.symphony.*` values as the source of orchestration policy.
 3. In observe mode, inspect and update workpad/observation state but do not mutate GitHub state.
 4. Do not ask a human for follow-up actions unless blocked by missing auth, permissions, or required tools.
-5. Final output should summarize completed work, validation run, blockers, proof artifacts, current phase, and next intended action.
+5. Final output should summarize completed work, validation run, blockers, proof artifacts, current phase, current PR status, and next intended action.
 
 If this is a continuation attempt, resume from the current workspace/session state instead of restarting from scratch.

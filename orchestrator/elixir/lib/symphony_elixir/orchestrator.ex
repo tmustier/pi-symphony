@@ -7,7 +7,16 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, OrchestrationPolicy, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{
+    AgentRunner,
+    Config,
+    OrchestrationLifecycle,
+    OrchestrationPolicy,
+    StatusDashboard,
+    Tracker,
+    Workspace
+  }
+
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -137,6 +146,7 @@ defmodule SymphonyElixir.Orchestrator do
 
               state
               |> complete_issue(issue_id)
+              |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
               |> maybe_schedule_continuation_retry(issue_id, running_entry)
 
             _ ->
@@ -235,6 +245,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     with :ok <- Config.validate!(),
          {:ok, issues} <- Tracker.fetch_candidate_issues() do
+      issues = reconcile_candidate_issue_lifecycles(issues, state)
       state = update_tracked_issues(state, issues)
 
       if available_slots(state) > 0 do
@@ -282,6 +293,51 @@ defmodule SymphonyElixir.Orchestrator do
         state
     end
   end
+
+  defp reconcile_candidate_issue_lifecycles(issues, %State{} = state) when is_list(issues) do
+    running_issue_ids = Map.keys(state.running) |> MapSet.new()
+
+    Enum.map(issues, &reconcile_candidate_issue_lifecycle(&1, running_issue_ids))
+  end
+
+  defp reconcile_candidate_issue_lifecycles(issues, _state) when is_list(issues), do: issues
+
+  defp reconcile_candidate_issue_lifecycle(%Issue{id: issue_id} = issue, running_issue_ids)
+       when is_binary(issue_id) and is_struct(running_issue_ids, MapSet) do
+    if MapSet.member?(running_issue_ids, issue_id) do
+      issue
+    else
+      case OrchestrationLifecycle.bootstrap_issue(issue) do
+        {:ok, %Issue{} = updated_issue} ->
+          updated_issue
+
+        {:error, reason} ->
+          Logger.debug("Failed to bootstrap workpad lifecycle for #{issue_context(issue)}: #{inspect(reason)}")
+
+          issue
+      end
+    end
+  end
+
+  defp reconcile_candidate_issue_lifecycle(issue, _running_issue_ids), do: issue
+
+  defp reconcile_completed_issue_lifecycle(%State{} = state, issue_id, running_entry)
+       when is_binary(issue_id) and is_map(running_entry) do
+    case OrchestrationLifecycle.reconcile_after_run(issue_id, running_entry) do
+      {:ok, %Issue{} = updated_issue} ->
+        state
+        |> update_tracked_issue(updated_issue)
+
+      {:ok, :missing} ->
+        state
+
+      {:error, reason} ->
+        Logger.debug("Failed to reconcile completed issue lifecycle issue_id=#{issue_id}: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp reconcile_completed_issue_lifecycle(%State{} = state, _issue_id, _running_entry), do: state
 
   defp reconcile_running_issues(%State{} = state) do
     state = reconcile_stalled_running_issues(state)
@@ -342,6 +398,16 @@ defmodule SymphonyElixir.Orchestrator do
   @spec select_worker_host_for_test(term(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
   def select_worker_host_for_test(%State{} = state, preferred_worker_host) do
     select_worker_host(state, preferred_worker_host)
+  end
+
+  @doc false
+  @spec reconcile_candidate_issue_lifecycles_for_test([Issue.t()], term()) :: [Issue.t()]
+  def reconcile_candidate_issue_lifecycles_for_test(issues, %State{} = state) when is_list(issues) do
+    reconcile_candidate_issue_lifecycles(issues, state)
+  end
+
+  def reconcile_candidate_issue_lifecycles_for_test(issues, _state) when is_list(issues) do
+    issues
   end
 
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
@@ -1467,6 +1533,17 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp update_tracked_issues(state, _issues), do: state
+
+  defp update_tracked_issue(%State{} = state, %Issue{id: issue_id} = issue) when is_binary(issue_id) do
+    tracked_issue =
+      issue
+      |> OrchestrationPolicy.tracked_issue(Config.settings!())
+      |> Map.put(:observed_at, DateTime.utc_now() |> DateTime.truncate(:second))
+
+    %{state | tracked: Map.put(state.tracked, issue_id, tracked_issue)}
+  end
+
+  defp update_tracked_issue(state, _issue), do: state
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
     available_slots(state) > 0 and state_slots_available?(issue, state.running)
