@@ -2289,6 +2289,99 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
+  test "post-run lifecycle reconciles externally merged PRs even before tracker approval arrives" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      review_enabled: false,
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_approval_states: ["Merging"]
+    )
+
+    issue = %Issue{
+      id: "issue-merge-before-approval",
+      identifier: "MT-704MH",
+      state: "In Review",
+      title: "Reconcile merge before tracker approval",
+      description: "An externally merged PR should still complete the tracker state",
+      url: "https://example.org/issues/MT-704MH",
+      branch_name: "feature/merge-before-approval",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: merging\n  branch: feature/merge-before-approval\n  pr:\n    number: 112\n    url: https://github.com/acme/widgets/pull/112\n    head_sha: abc123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 112,
+           "url" => "https://github.com/acme/widgets/pull/112",
+           "state" => "MERGED",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-before-approval",
+           "headRefOid" => "abc123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "UNKNOWN",
+           "mergeable" => "UNKNOWN",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => %{"oid" => "merge794"}
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-merge-before-approval"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-merge-before-approval",
+                 %{workspace_path: nil, worker_host: nil},
+                 runner: runner,
+                 tracker_module: Memory,
+                 issue_fetcher: issue_fetcher
+               )
+
+      assert updated_issue.state == "Done"
+      assert_receive {:memory_tracker_state_update, "issue-merge-before-approval", "Done"}
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "post-run lifecycle blocks open merges when the reviewed head is missing" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)

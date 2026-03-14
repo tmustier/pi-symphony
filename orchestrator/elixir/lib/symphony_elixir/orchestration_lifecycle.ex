@@ -432,22 +432,70 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp merge_phase?(phase), do: phase in ["ready_to_merge", "merging"]
 
   defp maybe_merge_pull_request(issue, runtime, pr_result, opts, settings) do
-    cond do
-      merge_phase?(runtime.phase) != true ->
-        {:skip, %{reason: :merge_not_requested}}
-
-      human_approval_ready?(issue, settings) != true ->
-        {:skip, %{reason: :human_approval_required, next_intended_action: "await_human_approval"}}
-
-      true ->
-        case merge_pr_context(runtime, pr_result, opts, settings) do
-          {:ok, context} ->
-            PullRequests.merge_if_head_matches(context, Keyword.put(opts, :settings, settings))
-
-          {:skip, _details} = skip ->
-            skip
-        end
+    if merge_phase?(runtime.phase) do
+      with {:ok, context} <- merge_pr_context(runtime, pr_result, opts, settings) do
+        execute_or_reconcile_merge(issue, context, opts, settings)
+      end
+    else
+      {:skip, %{reason: :merge_not_requested}}
     end
+  end
+
+  defp execute_or_reconcile_merge(issue, context, opts, settings) do
+    if human_approval_ready?(issue, settings) do
+      PullRequests.merge_if_head_matches(context, Keyword.put(opts, :settings, settings))
+    else
+      merge_reconciliation_without_approval(context, opts, settings)
+    end
+  end
+
+  defp merge_reconciliation_without_approval(context, opts, settings) do
+    case PullRequests.inspect_state(context, Keyword.put(opts, :settings, settings)) do
+      {:ok, pr_state} ->
+        {:skip, merge_skip_for_unapproved_pr(pr_state, context)}
+
+      {:skip, _details} = skip ->
+        skip
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp merge_skip_for_unapproved_pr(%{state: "MERGED"} = pr_state, context) do
+    %{
+      reason: :already_merged,
+      next_intended_action: "reconcile_merged_pr",
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
+  end
+
+  defp merge_skip_for_unapproved_pr(%{state: "CLOSED"} = pr_state, context) do
+    %{
+      reason: :pr_closed,
+      next_intended_action: "reconcile_closed_pr",
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
+  end
+
+  defp merge_skip_for_unapproved_pr(%{draft?: true} = pr_state, context) do
+    %{
+      reason: :pr_draft,
+      next_intended_action: "resolve_pr_draft_state",
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
+  end
+
+  defp merge_skip_for_unapproved_pr(pr_state, context) do
+    %{
+      reason: :human_approval_required,
+      next_intended_action: "await_human_approval",
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
   end
 
   defp merge_pr_context(runtime, {:ok, pr_info}, _opts, settings) when is_map(pr_info) do
