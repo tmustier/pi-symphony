@@ -373,7 +373,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
         kill_switch
       )
 
-    if base_dispatch_allowed do
+    if base_dispatch_allowed and passive_phase do
       fetch_value(observation, :next_intended_action) || computed
     else
       computed

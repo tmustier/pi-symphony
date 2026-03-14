@@ -670,7 +670,8 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
 
       assert runtime.phase == "ready_to_merge"
       assert runtime.waiting_reason == nil
-      assert runtime.next_intended_action == "merge_when_green"
+      assert runtime.next_intended_action == "dispatch_worker"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "merge_when_green"
       assert runtime.workpad.metadata["waiting"]["reason"] == nil
       assert runtime.passive_phase == false
       assert SymphonyElixir.OrchestrationPolicy.continuation_allowed?(updated_issue, Config.settings!()) == true
