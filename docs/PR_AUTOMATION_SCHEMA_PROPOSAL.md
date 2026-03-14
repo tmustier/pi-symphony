@@ -488,6 +488,7 @@ Minimum runtime behavior in observe mode:
 - update `observation.rollout_mode`
 - update concise `observation.gates`
 - surface these fields in the dashboard/API when available
+- surface tracked PR/review/merge metadata for passive issues so operators can see whether a PR is waiting on checks, human approval, or merge reconciliation
 
 This is not optional; without it, observe mode is not operator-usable.
 

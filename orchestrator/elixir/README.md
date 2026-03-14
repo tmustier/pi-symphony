@@ -148,6 +148,8 @@ Notes:
 - Passive polling can inspect the persisted PR, refresh live readiness gates (`checks`,
   `human_approval`, `mergeability`), and promote passive phases toward `waiting_for_human` /
   `ready_to_merge` without reopening implementation work.
+- The observability API and terminal dashboard surface passive tracked issues with their current
+  orchestration phase, waiting reason, next intended action, and persisted PR/review/merge metadata.
 - In `rollout.mode: merge`, Symphony can execute `gh pr merge` with head-match safety,
   persist merge attempt/outcome metadata in the workpad, and only move the tracker to `Done`
   after merge confirmation.

@@ -166,6 +166,22 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     refute backoff_line =~ "\\n"
   end
 
+  test "passive queue omits issues that are already running" do
+    snapshot_data =
+      {:ok,
+       %{
+         running: [running_entry(%{identifier: "MT-880"})],
+         retrying: [],
+         tracked: [tracked_entry(%{issue_id: "issue-merge-pending", issue_identifier: "MT-880"})],
+         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         rate_limits: nil
+       }}
+
+    rendered = render_snapshot(snapshot_data, 0.0)
+
+    refute rendered =~ "Passive queue"
+  end
+
   test "snapshot fixture: unlimited credits variant" do
     snapshot_data =
       {:ok,
@@ -192,6 +208,50 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
        }}
 
     Snapshot.assert_dashboard_snapshot!("credits_unlimited", render_snapshot(snapshot_data, 42.0))
+  end
+
+  test "snapshot fixture: passive PR queue" do
+    snapshot_data =
+      {:ok,
+       %{
+         running: [],
+         retrying: [],
+         tracked: [
+           tracked_entry(%{
+             issue_id: "issue-merge-pending",
+             issue_identifier: "MT-880",
+             state: "In Review",
+             phase: "waiting_for_checks",
+             waiting_reason: "checks_pending",
+             next_intended_action: "confirm_merge_completion",
+             workpad: %{
+               metadata: %{
+                 "pr" => %{"number" => 113, "head_sha" => "abc123def456"},
+                 "review" => %{"passes_completed" => 1, "last_reviewed_head_sha" => "abc123def456"},
+                 "merge" => %{"last_attempted_head_sha" => "abc123def456", "last_failure_reason" => nil}
+               }
+             }
+           }),
+           tracked_entry(%{
+             issue_id: "issue-merge-blocked",
+             issue_identifier: "MT-881",
+             state: "In Review",
+             phase: "blocked",
+             waiting_reason: "human_approval_required",
+             next_intended_action: "reconcile_merged_pr",
+             workpad: %{
+               metadata: %{
+                 "pr" => %{"number" => 112, "head_sha" => "fedcba654321"},
+                 "merge" => %{"last_merged_head_sha" => "fedcba654321", "last_merge_commit_sha" => "merge112999"}
+               }
+             }
+           })
+         ],
+         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         rate_limits: nil
+       }}
+
+    Snapshot.assert_dashboard_snapshot!("passive_pr_queue", render_snapshot(snapshot_data, 0.0))
   end
 
   defp render_snapshot(snapshot_data, tps) do
@@ -223,6 +283,22 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
         attempt: 1,
         due_in_ms: 1_000,
         error: "retry scheduled"
+      },
+      overrides
+    )
+  end
+
+  defp tracked_entry(overrides) do
+    Map.merge(
+      %{
+        issue_id: "issue-tracked",
+        issue_identifier: "MT-000",
+        state: "In Review",
+        phase: "waiting_for_checks",
+        passive_phase: true,
+        waiting_reason: "checks_pending",
+        next_intended_action: "inspect_pr_state",
+        workpad: %{metadata: %{}}
       },
       overrides
     )

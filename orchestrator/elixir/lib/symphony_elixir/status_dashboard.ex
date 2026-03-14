@@ -333,6 +333,7 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_snapshot_content(snapshot_data, tps, terminal_columns_override \\ nil) do
     case snapshot_data do
       {:ok, %{running: running, retrying: retrying, codex_totals: codex_totals} = snapshot} ->
+        tracked = Map.get(snapshot, :tracked, [])
         rate_limits = Map.get(snapshot, :rate_limits)
         project_link_lines = format_project_link_lines()
         project_refresh_line = format_project_refresh_line(Map.get(snapshot, :polling))
@@ -346,6 +347,8 @@ defmodule SymphonyElixir.StatusDashboard do
         running_rows = format_running_rows(running, running_event_width)
         running_to_backoff_spacer = if(running == [], do: [], else: ["│"])
         backoff_rows = format_retry_rows(retrying)
+        tracked_rows = format_tracked_rows(running, retrying, tracked, terminal_columns_override)
+        backoff_to_tracked_spacer = if(tracked_rows == [], do: [], else: ["│"])
 
         ([
            colorize("╭─ SYMPHONY STATUS", @ansi_bold),
@@ -374,6 +377,8 @@ defmodule SymphonyElixir.StatusDashboard do
            running_to_backoff_spacer ++
            [colorize("├─ Backoff queue", @ansi_bold), "│"] ++
            backoff_rows ++
+           backoff_to_tracked_spacer ++
+           tracked_rows ++
            [closing_border()])
         |> List.flatten()
         |> Enum.join("\n")
@@ -560,6 +565,7 @@ defmodule SymphonyElixir.StatusDashboard do
            %{
              running: running,
              retrying: retrying,
+             tracked: Map.get(snapshot, :tracked, []),
              codex_totals: codex_totals,
              rate_limits: Map.get(snapshot, :rate_limits),
              polling: Map.get(snapshot, :polling)
@@ -655,6 +661,168 @@ defmodule SymphonyElixir.StatusDashboard do
       |> String.split(", ")
     end
   end
+
+  defp format_tracked_rows(running, retrying, tracked, terminal_columns_override) do
+    tracked
+    |> passive_tracked_entries(running, retrying)
+    |> case do
+      [] ->
+        []
+
+      passive_tracked ->
+        [colorize("├─ Passive queue", @ansi_bold), "│"] ++
+          Enum.map(passive_tracked, &format_tracked_summary(&1, terminal_columns_override))
+    end
+  end
+
+  defp passive_tracked_entries(tracked, running, retrying) do
+    active_issue_keys =
+      running
+      |> Enum.map(&tracked_issue_key/1)
+      |> Kernel.++(Enum.map(retrying, &tracked_issue_key/1))
+      |> MapSet.new()
+
+    tracked
+    |> Enum.filter(&(Map.get(&1, :passive_phase, false) == true))
+    |> Enum.reject(&(MapSet.member?(active_issue_keys, tracked_issue_key(&1)) and tracked_issue_key(&1) != nil))
+    |> Enum.sort_by(&{Map.get(&1, :issue_identifier) || "", Map.get(&1, :issue_id) || ""})
+  end
+
+  defp tracked_issue_key(entry) when is_map(entry) do
+    map_path(entry, [:issue_identifier]) || map_path(entry, [:identifier]) || map_path(entry, [:issue_id])
+  end
+
+  defp tracked_issue_key(_entry), do: nil
+
+  defp format_tracked_summary(entry, terminal_columns_override) do
+    identifier = map_path(entry, [:issue_identifier]) || map_path(entry, [:issue_id]) || "unknown"
+    tracker_state = map_path(entry, [:state]) || "unknown"
+    phase = map_path(entry, [:phase]) || "unknown"
+
+    details =
+      [
+        tracker_state,
+        phase,
+        tracked_wait_summary(entry),
+        tracked_pr_summary(entry),
+        tracked_review_summary(entry),
+        tracked_merge_summary(entry),
+        tracked_next_action_summary(entry)
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" | ")
+      |> truncate(tracked_row_width(terminal_columns_override))
+
+    color = tracked_status_color(phase, map_path(entry, [:waiting_reason]))
+    "│  " <> colorize("◌", color) <> " " <> colorize(identifier, @ansi_cyan) <> " " <> colorize(details, color)
+  end
+
+  defp tracked_row_width(terminal_columns_override) when is_integer(terminal_columns_override) do
+    max(48, terminal_columns_override - 12)
+  end
+
+  defp tracked_row_width(_terminal_columns_override), do: 120
+
+  defp tracked_wait_summary(entry) do
+    case map_path(entry, [:waiting_reason]) do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp tracked_next_action_summary(entry) do
+    case map_path(entry, [:next_intended_action]) do
+      value when is_binary(value) and value != "" -> "next=#{value}"
+      _ -> nil
+    end
+  end
+
+  defp tracked_pr_summary(entry) do
+    pr_number = map_path(entry, [:workpad, :metadata, "pr", "number"])
+    pr_head_sha = map_path(entry, [:workpad, :metadata, "pr", "head_sha"])
+
+    cond do
+      is_integer(pr_number) and is_binary(pr_head_sha) and pr_head_sha != "" ->
+        "pr=##{pr_number}@#{short_sha(pr_head_sha)}"
+
+      is_integer(pr_number) ->
+        "pr=##{pr_number}"
+
+      is_binary(pr_head_sha) and pr_head_sha != "" ->
+        "pr=@#{short_sha(pr_head_sha)}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp tracked_review_summary(entry) do
+    passes_completed = map_path(entry, [:workpad, :metadata, "review", "passes_completed"])
+    reviewed_head_sha = present_binary(map_path(entry, [:workpad, :metadata, "review", "last_reviewed_head_sha"]))
+
+    cond do
+      is_integer(passes_completed) and is_binary(reviewed_head_sha) ->
+        "review=r#{passes_completed}@#{short_sha(reviewed_head_sha)}"
+
+      is_integer(passes_completed) ->
+        "review=r#{passes_completed}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp tracked_merge_summary(entry) do
+    merged_head_sha = present_binary(map_path(entry, [:workpad, :metadata, "merge", "last_merged_head_sha"]))
+
+    attempted_head_sha =
+      present_binary(map_path(entry, [:workpad, :metadata, "merge", "last_attempted_head_sha"]))
+
+    failure_reason =
+      present_binary(map_path(entry, [:workpad, :metadata, "merge", "last_failure_reason"]))
+
+    tracked_merge_summary_for(merged_head_sha, attempted_head_sha, failure_reason)
+  end
+
+  defp tracked_merge_summary_for(merged_head_sha, _attempted_head_sha, _failure_reason)
+       when is_binary(merged_head_sha) do
+    "merge=merged@#{short_sha(merged_head_sha)}"
+  end
+
+  defp tracked_merge_summary_for(nil, attempted_head_sha, failure_reason)
+       when is_binary(attempted_head_sha) and is_binary(failure_reason) do
+    "merge=#{failure_reason}@#{short_sha(attempted_head_sha)}"
+  end
+
+  defp tracked_merge_summary_for(nil, _attempted_head_sha, failure_reason)
+       when is_binary(failure_reason) do
+    "merge=#{failure_reason}"
+  end
+
+  defp tracked_merge_summary_for(nil, attempted_head_sha, nil)
+       when is_binary(attempted_head_sha) do
+    "merge=attempted@#{short_sha(attempted_head_sha)}"
+  end
+
+  defp tracked_merge_summary_for(_merged_head_sha, _attempted_head_sha, _failure_reason), do: nil
+
+  defp tracked_status_color("blocked", _waiting_reason), do: @ansi_red
+  defp tracked_status_color("waiting_for_human", _waiting_reason), do: @ansi_yellow
+  defp tracked_status_color(_phase, "human_approval_required"), do: @ansi_yellow
+  defp tracked_status_color(_phase, "checks_pending"), do: @ansi_cyan
+  defp tracked_status_color(_phase, "mergeability_changed"), do: @ansi_orange
+  defp tracked_status_color(_phase, _waiting_reason), do: @ansi_blue
+
+  defp present_binary(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp present_binary(_value), do: nil
+
+  defp short_sha(value) when is_binary(value), do: String.slice(value, 0, 7)
 
   defp format_retry_summary(retry_entry) do
     issue_id = retry_entry.issue_id || "unknown"
