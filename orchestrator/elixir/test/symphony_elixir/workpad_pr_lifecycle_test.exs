@@ -1926,7 +1926,9 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       orchestration_required_workpad_marker: "## Symphony Workpad",
       pr_auto_create: true,
       pr_required_labels: [],
-      review_enabled: false,
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
       merge_mode: "auto",
       merge_method: "squash",
       merge_approval_states: ["Merging"]

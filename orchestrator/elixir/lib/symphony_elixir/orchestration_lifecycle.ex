@@ -470,11 +470,12 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp expected_merge_head_sha(runtime, pr_info, settings) do
     review_metadata = current_review_metadata(runtime)
     pr_metadata = current_pr_metadata(runtime)
+    pr_head_sha = pick_string([Map.get(pr_info, :head_sha), Map.get(pr_metadata, "head_sha")])
 
     if settings.review.enabled == true do
-      pick_string([Map.get(review_metadata, "last_reviewed_head_sha")])
+      pick_string([Map.get(review_metadata, "last_reviewed_head_sha"), pr_head_sha])
     else
-      pick_string([Map.get(pr_info, :head_sha), Map.get(pr_metadata, "head_sha")])
+      pr_head_sha
     end
   end
 
@@ -668,9 +669,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp done_tracker_state(settings) do
     terminal_states = Enum.filter(settings.tracker.terminal_states, &is_binary/1)
-
-    find_preferred_terminal_state(terminal_states, ["done", "completed", "closed"]) ||
-      List.first(terminal_states)
+    find_preferred_terminal_state(terminal_states, ["done", "completed", "closed"])
   end
 
   defp find_preferred_terminal_state(terminal_states, preferred_states) do
