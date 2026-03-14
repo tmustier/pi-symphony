@@ -5,7 +5,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   require Logger
 
-  alias SymphonyElixir.{Config, OrchestrationPolicy, PullRequests, Tracker, Workpad, WorkspaceGit}
+  alias SymphonyElixir.{Config, OrchestrationPolicy, PullRequests, ReviewArtifact, Tracker, Workpad, WorkspaceGit}
   alias SymphonyElixir.Linear.Issue
 
   @type reconcile_result :: {:ok, Issue.t()} | {:ok, :missing} | {:error, term()}
@@ -53,6 +53,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
         git_state = inspect_workspace_git(running_entry, opts)
         pr_result = PullRequests.resolve_or_create(issue, git_state, Keyword.put(opts, :settings, settings))
         runtime = OrchestrationPolicy.issue_runtime(issue, settings)
+        review_result = maybe_persist_review_comment(issue, runtime, pr_result, running_entry, opts, settings)
 
         updates =
           lifecycle_updates(
@@ -60,8 +61,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
             runtime,
             git_state,
             pr_result,
-            settings,
-            running_entry
+            review_result,
+            settings
           )
 
         Workpad.sync(issue, updates, Keyword.put(opts, :settings, settings))
@@ -96,26 +97,31 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
-  defp lifecycle_updates(issue, runtime, git_state, pr_result, settings, _running_entry) do
+  defp lifecycle_updates(issue, runtime, git_state, pr_result, review_result, settings) do
     branch = pick_string([Map.get(git_state, :branch), issue.branch_name])
     head_sha = pick_string([Map.get(git_state, :head_sha)])
     pr_metadata = pr_metadata(pr_result, head_sha)
 
-    base_updates = %{
-      owned: managed_owned?(issue, runtime),
-      branch: branch,
-      pr: pr_metadata,
-      observation_gates: observation_gates(issue, runtime, pr_result),
-      next_intended_action: next_action(runtime, pr_result),
-      waiting_reason: waiting_reason(runtime, pr_result),
-      phase: phase_after_reconcile(runtime, pr_result)
-    }
+    base_updates =
+      %{
+        owned: managed_owned?(issue, runtime),
+        branch: branch,
+        pr: pr_metadata,
+        observation_gates: observation_gates(issue, runtime, pr_result, review_result, pr_metadata, settings),
+        next_intended_action: next_action(runtime, pr_result),
+        waiting_reason: waiting_reason(runtime, pr_result),
+        phase: phase_after_reconcile(runtime, pr_result)
+      }
+      |> maybe_put_review_update(review_update(runtime, pr_metadata, review_result))
 
-    case pr_result do
-      {:error, _reason} when settings.pr.auto_create == true and settings.rollout.mode in ["mutate", "merge"] ->
+    cond do
+      match?({:error, _reason}, pr_result) and settings.pr.auto_create == true and settings.rollout.mode in ["mutate", "merge"] ->
         Map.merge(base_updates, %{phase: "blocked", waiting_reason: "tool_unavailable", next_intended_action: "restore_pr_tooling"})
 
-      _ ->
+      match?({:error, _reason}, review_result) ->
+        Map.merge(base_updates, %{phase: "reviewing", waiting_reason: nil, next_intended_action: "repair_review_comment_persistence"})
+
+      true ->
         base_updates
     end
   end
@@ -179,33 +185,126 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     }
   end
 
-  defp observation_gates(issue, runtime, {:ok, _pr_info}) do
-    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "open"})
+  defp observation_gates(issue, runtime, pr_result, review_result, pr_metadata, settings) do
+    bootstrap_gates(issue, runtime)
+    |> Map.put("pr", pr_gate(pr_result))
+    |> Map.put("review", review_gate(runtime, pr_metadata, review_result, settings))
   end
 
-  defp observation_gates(issue, runtime, {:skip, %{reason: :observe_only}}) do
-    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "observe_only"})
+  defp pr_gate({:ok, _pr_info}), do: "open"
+  defp pr_gate({:skip, %{reason: :observe_only}}), do: "observe_only"
+  defp pr_gate({:skip, %{reason: :auto_create_disabled}}), do: "policy_disabled"
+  defp pr_gate({:skip, %{reason: :closed_pr_policy_stop}}), do: "blocked"
+  defp pr_gate({:skip, %{reason: :merged_pr_cannot_reopen}}), do: "blocked"
+  defp pr_gate({:skip, _details}), do: "pending"
+  defp pr_gate({:error, _reason}), do: "tool_unavailable"
+
+  defp review_gate(_runtime, _pr_metadata, _review_result, settings) when settings.review.enabled != true,
+    do: "disabled"
+
+  defp review_gate(_runtime, _pr_metadata, {:ok, _details}, _settings), do: "persisted"
+  defp review_gate(_runtime, _pr_metadata, {:skip, %{reason: :review_comment_mode_off}}, _settings), do: "disabled"
+  defp review_gate(_runtime, _pr_metadata, {:skip, %{reason: :observe_only}}, _settings), do: "observe_only"
+  defp review_gate(_runtime, _pr_metadata, {:skip, %{reason: :missing_review_body}}, _settings), do: "missing"
+  defp review_gate(_runtime, _pr_metadata, {:error, _reason}, _settings), do: "tool_unavailable"
+
+  defp review_gate(runtime, pr_metadata, _review_result, _settings) do
+    current_head_sha = Map.get(pr_metadata, :head_sha) || Map.get(pr_metadata, "head_sha")
+    review_metadata = current_review_metadata(runtime)
+    last_reviewed_head_sha = Map.get(review_metadata, "last_reviewed_head_sha")
+    passes_completed = Map.get(review_metadata, "passes_completed") || 0
+
+    review_head_state(current_head_sha, last_reviewed_head_sha, passes_completed)
   end
 
-  defp observation_gates(issue, runtime, {:skip, %{reason: :auto_create_disabled}}) do
-    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "policy_disabled"})
+  defp review_head_state(current_head_sha, last_reviewed_head_sha, passes_completed)
+       when is_binary(current_head_sha) and is_binary(last_reviewed_head_sha) and passes_completed > 0 do
+    if current_head_sha == last_reviewed_head_sha, do: "current", else: "stale"
   end
 
-  defp observation_gates(issue, runtime, {:skip, %{reason: :closed_pr_policy_stop}}) do
-    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "blocked"})
+  defp review_head_state(_current_head_sha, _last_reviewed_head_sha, passes_completed)
+       when passes_completed > 0,
+       do: "current"
+
+  defp review_head_state(_current_head_sha, _last_reviewed_head_sha, _passes_completed), do: "missing"
+
+  defp maybe_persist_review_comment(_issue, runtime, pr_result, running_entry, opts, settings) do
+    with true <- settings.review.enabled == true,
+         {:ok, pr_info} <- pr_result,
+         {:ok, artifact} <- load_review_artifact(running_entry),
+         %{} = artifact <- artifact do
+      PullRequests.upsert_review_comment(
+        %{
+          number: Map.get(pr_info, :number),
+          repo_slug: Map.get(pr_info, :repo_slug),
+          comment_id: current_review_comment_id(runtime)
+        },
+        artifact.body,
+        Keyword.put(opts, :settings, settings)
+      )
+    else
+      false -> {:skip, %{reason: :review_disabled}}
+      {:skip, _details} = skip -> skip
+      {:error, _reason} = error -> error
+      :missing -> {:skip, %{reason: :missing_review_body}}
+    end
   end
 
-  defp observation_gates(issue, runtime, {:skip, %{reason: :merged_pr_cannot_reopen}}) do
-    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "blocked"})
+  defp load_review_artifact(running_entry) when is_map(running_entry) do
+    running_entry
+    |> Map.get(:workspace_path)
+    |> ReviewArtifact.load()
   end
 
-  defp observation_gates(issue, runtime, {:skip, _details}) do
-    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "pending"})
+  defp review_update(runtime, pr_metadata, {:ok, details}) do
+    review_metadata = current_review_metadata(runtime)
+    head_sha = Map.get(pr_metadata, :head_sha) || Map.get(pr_metadata, "head_sha")
+    last_reviewed_head_sha = Map.get(review_metadata, "last_reviewed_head_sha")
+    passes_completed = Map.get(review_metadata, "passes_completed") || 0
+
+    %{
+      comment_id: Map.get(details, :comment_id),
+      passes_completed: persisted_review_pass_count(last_reviewed_head_sha, head_sha, passes_completed),
+      last_reviewed_head_sha: head_sha,
+      last_fixed_head_sha: last_fixed_head_sha(review_metadata, last_reviewed_head_sha, head_sha)
+    }
   end
 
-  defp observation_gates(issue, runtime, {:error, _reason}) do
-    Map.merge(bootstrap_gates(issue, runtime), %{"pr" => "tool_unavailable"})
+  defp review_update(_runtime, _pr_metadata, _review_result), do: nil
+
+  defp persisted_review_pass_count(last_reviewed_head_sha, head_sha, passes_completed) do
+    if last_reviewed_head_sha == head_sha and passes_completed > 0 do
+      passes_completed
+    else
+      passes_completed + 1
+    end
   end
+
+  defp last_fixed_head_sha(review_metadata, previous_reviewed_head_sha, current_head_sha) do
+    if is_binary(previous_reviewed_head_sha) and previous_reviewed_head_sha != current_head_sha do
+      current_head_sha
+    else
+      Map.get(review_metadata, "last_fixed_head_sha")
+    end
+  end
+
+  defp current_review_metadata(runtime) do
+    runtime
+    |> fetch_value(:workpad)
+    |> fetch_value(:metadata)
+    |> normalize_map()
+    |> Map.get("review", %{})
+    |> normalize_map()
+  end
+
+  defp current_review_comment_id(runtime) do
+    runtime
+    |> current_review_metadata()
+    |> Map.get("comment_id")
+  end
+
+  defp maybe_put_review_update(updates, nil), do: updates
+  defp maybe_put_review_update(updates, review), do: Map.put(updates, :review, review)
 
   defp bootstrap_gates(issue, runtime) do
     %{
@@ -242,6 +341,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp fetch_value(_map, _key), do: nil
+
+  defp normalize_map(%{} = map), do: map
+  defp normalize_map(_value), do: %{}
 
   defp pick_string(values) when is_list(values) do
     Enum.find_value(values, fn

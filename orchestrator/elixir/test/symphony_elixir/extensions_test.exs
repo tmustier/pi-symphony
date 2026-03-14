@@ -518,7 +518,23 @@ defmodule SymphonyElixir.ExtensionsTest do
             comment_id: "comment-1",
             metadata_status: "ok",
             phase_source: "workpad",
-            waiting_reason: "checks_pending"
+            waiting_reason: "checks_pending",
+            metadata: %{
+              "pr" => %{"number" => 77, "url" => "https://github.com/acme/widgets/pull/77", "head_sha" => "abc123"},
+              "review" => %{"comment_id" => 444, "passes_completed" => 1, "last_reviewed_head_sha" => "abc123"},
+              "observation" => %{
+                "last_observed_at" => "2026-03-14T00:00:00Z",
+                "next_intended_action" => "poll_on_next_cycle",
+                "rollout_mode" => "observe",
+                "gates" => %{"pr" => "open", "review" => "current"}
+              }
+            },
+            observation: %{
+              "last_observed_at" => "2026-03-14T00:00:00Z",
+              "next_intended_action" => "poll_on_next_cycle",
+              "rollout_mode" => "observe",
+              "gates" => %{"pr" => "open", "review" => "current"}
+            }
           }
         }
       ],
@@ -540,6 +556,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert issue_payload["status"] == "tracked"
     assert issue_payload["tracked"]["phase"] == "waiting_for_checks"
     assert issue_payload["tracked"]["workpad"]["metadata_status"] == "ok"
+    assert issue_payload["tracked"]["workpad"]["pr"]["number"] == 77
+    assert issue_payload["tracked"]["workpad"]["review"]["comment_id"] == 444
+    assert issue_payload["tracked"]["workpad"]["observation"]["gates"]["review"] == "current"
   end
 
   test "phoenix observability api preserves retry status when tracked data is also present" do
