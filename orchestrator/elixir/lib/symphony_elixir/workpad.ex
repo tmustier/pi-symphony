@@ -489,7 +489,11 @@ defmodule SymphonyElixir.Workpad do
       "passes_completed" => 1,
       "last_reviewed_head_sha" => 2,
       "last_fixed_head_sha" => 3,
-      "last_attempted_head_sha" => 0,
+      "last_attempted_at" => 0,
+      "last_attempted_head_sha" => 1,
+      "last_merge_commit_sha" => 2,
+      "last_merged_head_sha" => 3,
+      "last_failure_reason" => 4,
       "reason" => 0,
       "since" => 1,
       "last_observed_at" => 0,
@@ -516,7 +520,13 @@ defmodule SymphonyElixir.Workpad do
   end
 
   defp default_merge_metadata do
-    %{"last_attempted_head_sha" => nil}
+    %{
+      "last_attempted_at" => nil,
+      "last_attempted_head_sha" => nil,
+      "last_merge_commit_sha" => nil,
+      "last_merged_head_sha" => nil,
+      "last_failure_reason" => nil
+    }
   end
 
   defp merge_section(current_metadata, updates, section_key, defaults) do

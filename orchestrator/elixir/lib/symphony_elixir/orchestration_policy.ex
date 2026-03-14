@@ -102,6 +102,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
       next_intended_action:
         preferred_next_intended_action(
           workpad.observation,
+          workpad.phase,
           passive_phase,
           base_dispatch_allowed,
           dispatch_allowed,
@@ -362,7 +363,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     end
   end
 
-  defp preferred_next_intended_action(observation, passive_phase, base_dispatch_allowed, dispatch_allowed, rollout_mode, ownership, kill_switch) do
+  defp preferred_next_intended_action(observation, phase, passive_phase, base_dispatch_allowed, dispatch_allowed, rollout_mode, ownership, kill_switch) do
     computed =
       next_intended_action(
         passive_phase,
@@ -373,7 +374,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
         kill_switch
       )
 
-    if base_dispatch_allowed and passive_phase do
+    if base_dispatch_allowed and (passive_phase or phase == "merging") do
       fetch_value(observation, :next_intended_action) || computed
     else
       computed

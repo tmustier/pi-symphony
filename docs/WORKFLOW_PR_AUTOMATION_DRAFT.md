@@ -290,6 +290,8 @@ Phase behavior:
   - require green checks when `policy.merge.require_green_checks` is true
   - require the expected head SHA to still match when `policy.merge.require_head_match` is true
   - if `policy.merge.require_human_approval` is true, only merge when the tracker state is in `policy.merge.approval_states`; do not move the ticket into those states yourself
+  - persist merge attempt metadata in the workpad and only move the tracker into `Done` after the merge is confirmed
+  - if the tracker uses a different post-merge terminal state, set `policy.merge.completion_state` explicitly
 
 PR and review rules:
 1. Reuse the existing branch PR when allowed by policy.

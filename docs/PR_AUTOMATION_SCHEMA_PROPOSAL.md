@@ -207,6 +207,7 @@ merge:
   require_human_approval: true
   approval_states:
     - Merging
+  completion_state: Done
 ```
 
 Suggested semantics:
@@ -218,6 +219,7 @@ Suggested semantics:
 - `require_head_match` — merge may proceed only if the PR head SHA still matches the reviewed/expected SHA
 - `require_human_approval` — whether merge requires a human-controlled tracker approval lane
 - `approval_states` — tracker states from which merge may be executed, e.g. `Merging`
+- `completion_state` — optional explicit tracker state to use after confirmed merge when the workflow does not use `Done`
 
 ## 5. Workpad metadata contract
 
@@ -242,7 +244,11 @@ symphony:
     last_reviewed_head_sha: abcdef1
     last_fixed_head_sha: abcdef1
   merge:
+    last_attempted_at: null
     last_attempted_head_sha: null
+    last_merge_commit_sha: null
+    last_merged_head_sha: null
+    last_failure_reason: null
   waiting:
     reason: checks_pending
     since: 2026-03-14T00:00:00Z

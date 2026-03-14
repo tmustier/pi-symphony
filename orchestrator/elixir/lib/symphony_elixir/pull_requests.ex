@@ -8,6 +8,7 @@ defmodule SymphonyElixir.PullRequests do
   @type pr_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
   @type pr_state_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
   @type review_comment_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
+  @type merge_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
 
   @doc false
   @spec resolve_or_create_for_test(Issue.t(), map(), keyword()) :: pr_result()
@@ -20,6 +21,10 @@ defmodule SymphonyElixir.PullRequests do
   @doc false
   @spec upsert_review_comment_for_test(map(), String.t(), keyword()) :: review_comment_result()
   def upsert_review_comment_for_test(pr_context, body, opts \\ []), do: upsert_review_comment(pr_context, body, opts)
+
+  @doc false
+  @spec merge_if_head_matches_for_test(map(), keyword()) :: merge_result()
+  def merge_if_head_matches_for_test(pr_context, opts \\ []), do: merge_if_head_matches(pr_context, opts)
 
   @spec resolve_or_create(Issue.t(), map(), keyword()) :: pr_result()
   def resolve_or_create(%Issue{} = issue, git_state, opts \\ []) when is_map(git_state) and is_list(opts) do
@@ -76,6 +81,21 @@ defmodule SymphonyElixir.PullRequests do
     end
   end
 
+  @spec merge_if_head_matches(map(), keyword()) :: merge_result()
+  def merge_if_head_matches(pr_context, opts \\ []) when is_map(pr_context) and is_list(opts) do
+    settings = Keyword.get(opts, :settings, Config.settings!())
+    runner = Keyword.get(opts, :runner, command_runner())
+    context = merge_context(pr_context, settings, opts)
+
+    case merge_skip_result(context, settings) do
+      nil ->
+        merge_pull_request(context, settings, runner)
+
+      result ->
+        {:skip, result}
+    end
+  end
+
   defp review_comment_skip_result(context, settings, normalized_body) do
     review_comment_mode_skip(settings) ||
       review_comment_mutation_skip(settings) ||
@@ -113,6 +133,201 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp review_comment_body_skip(_normalized_body), do: nil
+
+  defp merge_skip_result(context, settings) do
+    merge_mode_skip(settings) ||
+      merge_rollout_skip(settings) ||
+      merge_executor_skip(context) ||
+      merge_context_skip(context, settings)
+  end
+
+  defp merge_mode_skip(settings) do
+    if settings.merge.mode != "auto" do
+      %{reason: :merge_mode_disabled, next_intended_action: "enable_merge_mode"}
+    end
+  end
+
+  defp merge_rollout_skip(settings) do
+    if settings.rollout.mode != "merge" do
+      %{reason: :merge_rollout_disabled, next_intended_action: "merge_when_rollout_allows"}
+    end
+  end
+
+  defp merge_executor_skip(%{executor: executor}) do
+    if executor != "gh" do
+      %{reason: :unsupported_merge_executor, next_intended_action: "configure_supported_merge_executor"}
+    end
+  end
+
+  defp merge_context_skip(context, _settings) do
+    cond do
+      is_nil(context.repo_slug) ->
+        %{reason: :missing_repo_slug, next_intended_action: "record_repo_context"}
+
+      is_nil(context.pr_number) ->
+        %{reason: :missing_pr_number, next_intended_action: "record_pr_context"}
+
+      true ->
+        nil
+    end
+  end
+
+  defp merge_pull_request(context, settings, runner) do
+    with {:ok, pr_state} <- inspect_pull_request_state(context, runner),
+         :ok <- validate_merge_preconditions(pr_state, context, settings),
+         :ok <- run_pull_request_merge(context, runner),
+         {:ok, merged_state} <- inspect_pull_request_state(context, runner) do
+      case confirm_merged_state(merged_state, context) do
+        :ok -> {:ok, merge_success(merged_state, context)}
+        {:skip, _details} = result -> result
+        :merge_not_confirmed -> {:error, :merge_not_confirmed}
+      end
+    else
+      {:skip, _details} = result -> result
+      {:error, _reason} = result -> result
+    end
+  end
+
+  defp validate_merge_preconditions(pr_state, context, settings) when is_map(pr_state) do
+    terminal_skip(pr_state, context) ||
+      mergeability_skip(pr_state, context) ||
+      checks_skip(pr_state, context, settings) ||
+      head_match_skip(pr_state, context, settings) ||
+      :ok
+  end
+
+  defp terminal_skip(%{state: "MERGED"} = pr_state, context) do
+    {:skip, merge_skip(:already_merged, context, "reconcile_merged_pr", pr_state)}
+  end
+
+  defp terminal_skip(%{state: "CLOSED"} = pr_state, context) do
+    {:skip, merge_skip(:pr_closed, context, "reconcile_closed_pr", pr_state)}
+  end
+
+  defp terminal_skip(%{draft?: true} = pr_state, context) do
+    {:skip, merge_skip(:pr_draft, context, "resolve_pr_draft_state", pr_state)}
+  end
+
+  defp terminal_skip(_pr_state, _context), do: nil
+
+  defp mergeability_skip(pr_state, context) do
+    if mergeability_state(pr_state) == "blocked" do
+      {:skip, merge_skip(:mergeability_blocked, context, "repair_mergeability", pr_state)}
+    end
+  end
+
+  defp checks_skip(pr_state, context, settings) do
+    check_state = get_in(pr_state, [:checks, :state])
+
+    cond do
+      settings.merge.require_green_checks != true -> nil
+      check_state == "fail" -> {:skip, merge_skip(:checks_failed, context, "investigate_failing_checks", pr_state)}
+      check_state != "pass" -> {:skip, merge_skip(:checks_pending, context, "poll_on_next_cycle", pr_state)}
+      true -> nil
+    end
+  end
+
+  defp head_match_skip(pr_state, context, settings) do
+    cond do
+      settings.merge.require_head_match != true ->
+        nil
+
+      is_nil(context.expected_head_sha) ->
+        {:skip,
+         merge_skip(
+           :missing_expected_head_sha,
+           context,
+           missing_expected_head_action(settings),
+           pr_state
+         )}
+
+      pr_state.head_sha != context.expected_head_sha ->
+        {:skip, merge_skip(:head_mismatch, context, "rerun_review_for_current_head", pr_state)}
+
+      true ->
+        nil
+    end
+  end
+
+  defp missing_expected_head_action(settings) do
+    if settings.review.enabled == true, do: "rerun_review_for_current_head", else: "record_expected_merge_head"
+  end
+
+  defp confirm_merged_state(%{state: "MERGED"}, _context), do: :ok
+
+  defp confirm_merged_state(%{state: "OPEN"} = pr_state, context) do
+    {:skip, merge_skip(:merge_pending_confirmation, context, "confirm_merge_completion", pr_state)}
+  end
+
+  defp confirm_merged_state(_pr_state, _context), do: :merge_not_confirmed
+
+  defp merge_skip(reason, context, next_intended_action, pr_state) do
+    %{
+      reason: reason,
+      pr_number: context.pr_number,
+      repo_slug: context.repo_slug,
+      expected_head_sha: context.expected_head_sha,
+      next_intended_action: next_intended_action,
+      pr_state: pr_state
+    }
+  end
+
+  defp mergeability_state(%{state: state, draft?: draft?, mergeable: mergeable, merge_state_status: merge_state_status}) do
+    mergeable = normalize_merge_token(mergeable)
+    merge_state_status = normalize_merge_token(merge_state_status)
+
+    cond do
+      state in ["MERGED", "CLOSED"] -> "blocked"
+      draft? == true -> "blocked"
+      mergeable == "CONFLICTING" -> "blocked"
+      merge_state_status in ["DIRTY", "BLOCKED", "DRAFT"] -> "blocked"
+      mergeable == "MERGEABLE" -> "pass"
+      merge_state_status in ["CLEAN", "UNSTABLE", "HAS_HOOKS"] -> "pass"
+      true -> "unknown"
+    end
+  end
+
+  defp run_pull_request_merge(context, runner) do
+    args =
+      [
+        "pr",
+        "merge",
+        Integer.to_string(context.pr_number),
+        "--repo",
+        context.repo_slug,
+        merge_method_flag(context.method)
+      ]
+      |> maybe_put_match_head_flag(context.expected_head_sha)
+
+    case runner.("gh", args, []) do
+      {:ok, _output} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp merge_method_flag("merge"), do: "--merge"
+  defp merge_method_flag("rebase"), do: "--rebase"
+  defp merge_method_flag(_method), do: "--squash"
+
+  defp maybe_put_match_head_flag(args, nil), do: args
+
+  defp maybe_put_match_head_flag(args, expected_head_sha) when is_binary(expected_head_sha) do
+    args ++ ["--match-head-commit", expected_head_sha]
+  end
+
+  defp merge_success(pr_state, context) do
+    %{
+      action: :merged,
+      pr_number: context.pr_number,
+      repo_slug: context.repo_slug,
+      url: pr_state.url,
+      state: pr_state.state,
+      head_sha: pr_state.head_sha,
+      expected_head_sha: context.expected_head_sha,
+      merge_commit_sha: Map.get(pr_state, :merge_commit_sha),
+      pr_state: pr_state
+    }
+  end
 
   defp resolve_from_existing_prs(issue, context, prs, settings, runner) do
     open_pr = Enum.find(prs, &(&1.state == "OPEN"))
@@ -243,12 +458,12 @@ defmodule SymphonyElixir.PullRequests do
       "--repo",
       context.repo_slug,
       "--json",
-      "number,url,state,isDraft,headRefName,headRefOid,baseRefName,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup"
+      "number,url,state,isDraft,headRefName,headRefOid,baseRefName,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup,mergeCommit"
     ]
 
     with {:ok, output} <- runner.("gh", args, []),
          {:ok, pr} <- Jason.decode(output) do
-      {:ok, normalize_inspected_pull_request(pr)}
+      {:ok, normalize_inspected_pull_request(pr, context.repo_slug)}
     else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :invalid_pr_view_response}
@@ -431,6 +646,26 @@ defmodule SymphonyElixir.PullRequests do
     }
   end
 
+  defp merge_context(pr_context, settings, opts) do
+    inspect_context = inspect_pr_context(pr_context, settings, opts)
+
+    %{
+      pr_number: inspect_context.pr_number,
+      repo_slug: inspect_context.repo_slug,
+      url: inspect_context.url,
+      expected_head_sha:
+        pick_optional_string([
+          Keyword.get(opts, :expected_head_sha),
+          Map.get(pr_context, :expected_head_sha),
+          Map.get(pr_context, "expected_head_sha"),
+          Map.get(pr_context, :head_sha),
+          Map.get(pr_context, "head_sha")
+        ]),
+      executor: pick_optional_string([settings.merge.executor]) || "gh",
+      method: pick_optional_string([settings.merge.method]) || "squash"
+    }
+  end
+
   defp pr_success(pr, context, action) do
     %{
       action: action,
@@ -528,11 +763,12 @@ defmodule SymphonyElixir.PullRequests do
     }
   end
 
-  defp normalize_inspected_pull_request(%{} = pr) do
+  defp normalize_inspected_pull_request(%{} = pr, repo_slug) do
     checks = normalize_status_check_rollup(pr["statusCheckRollup"])
 
     %{
       number: pr["number"],
+      repo_slug: repo_slug,
       url: pr["url"],
       state: pr["state"],
       draft?: pr["isDraft"] == true,
@@ -542,6 +778,7 @@ defmodule SymphonyElixir.PullRequests do
       merge_state_status: pick_optional_string([pr["mergeStateStatus"]]),
       mergeable: pick_optional_string([pr["mergeable"]]),
       review_decision: pick_optional_string([pr["reviewDecision"]]),
+      merge_commit_sha: merge_commit_sha(pr["mergeCommit"]),
       checks: checks
     }
   end
@@ -603,6 +840,12 @@ defmodule SymphonyElixir.PullRequests do
   defp to_status_token(nil), do: nil
   defp to_status_token(value) when is_binary(value), do: String.upcase(String.trim(value))
   defp to_status_token(_value), do: nil
+
+  defp merge_commit_sha(%{"oid" => oid}), do: pick_optional_string([oid])
+  defp merge_commit_sha(_value), do: nil
+
+  defp normalize_merge_token(value) when is_binary(value), do: String.upcase(String.trim(value))
+  defp normalize_merge_token(_value), do: nil
 
   defp normalize_issue_comment(%{} = comment) do
     %{
