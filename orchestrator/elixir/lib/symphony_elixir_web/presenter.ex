@@ -244,6 +244,7 @@ defmodule SymphonyElixirWeb.Presenter do
     |> maybe_put(:waiting_reason, fetch_value(workpad, :waiting_reason))
     |> maybe_put(:pr, tracked_pr_metadata(metadata))
     |> maybe_put(:review, tracked_review_metadata(metadata))
+    |> maybe_put(:merge, tracked_merge_metadata(metadata))
     |> maybe_put(:observation, tracked_observation_metadata(observation))
   end
 
@@ -291,6 +292,29 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp tracked_review_metadata(_metadata), do: nil
+
+  defp tracked_merge_metadata(metadata) when is_map(metadata) do
+    metadata
+    |> Map.get("merge", %{})
+    |> case do
+      %{} = merge ->
+        %{}
+        |> maybe_put(:last_attempted_at, merge["last_attempted_at"])
+        |> maybe_put(:last_attempted_head_sha, merge["last_attempted_head_sha"])
+        |> maybe_put(:last_merge_commit_sha, merge["last_merge_commit_sha"])
+        |> maybe_put(:last_merged_head_sha, merge["last_merged_head_sha"])
+        |> maybe_put(:last_failure_reason, merge["last_failure_reason"])
+        |> case do
+          payload when map_size(payload) == 0 -> nil
+          payload -> payload
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp tracked_merge_metadata(_metadata), do: nil
 
   defp tracked_observation_metadata(observation) when is_map(observation) do
     %{}
