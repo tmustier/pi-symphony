@@ -368,7 +368,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_pr_updates_from_result({:ok, pr_state}, issue, runtime, settings) when is_map(pr_state) do
     pr_metadata = %{number: pr_state.number, url: pr_state.url, head_sha: pr_state.head_sha}
     review_status = review_gate(runtime, %{head_sha: pr_state.head_sha}, nil, settings)
-    observation_gates = passive_pr_observation_gates(issue, pr_metadata, pr_state, review_status, settings)
+    observation_gates = passive_pr_observation_gates(issue, pr_state, review_status, settings)
 
     %{
       phase: passive_phase_after_observation(issue, runtime, pr_state, review_status, settings),
@@ -391,14 +391,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp passive_pr_updates_from_result(_result, _issue, _runtime, _settings), do: %{}
 
-  defp passive_pr_observation_gates(issue, pr_metadata, pr_state, review_status, settings) do
+  defp passive_pr_observation_gates(issue, pr_state, review_status, settings) do
     %{
       "pr" => passive_pr_gate(pr_state),
       "review" => review_status,
       "checks" => checks_gate(pr_state),
       "human_approval" => human_approval_gate(issue, settings),
-      "mergeability" => mergeability_gate(pr_state),
-      "head_match" => head_match_gate(pr_metadata, pr_state)
+      "mergeability" => mergeability_gate(pr_state)
     }
   end
 
@@ -497,17 +496,6 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp mergeability_ready?(pr_state), do: mergeability_gate(pr_state) == "pass"
 
   defp ready_to_merge_promotion_allowed?(settings), do: settings.rollout.mode in ["mutate", "merge"]
-
-  defp head_match_gate(pr_metadata, %{head_sha: current_head_sha}) do
-    persisted_head_sha = Map.get(pr_metadata, :head_sha) || Map.get(pr_metadata, "head_sha")
-
-    cond do
-      not is_binary(current_head_sha) -> "missing"
-      not is_binary(persisted_head_sha) -> "missing"
-      current_head_sha == persisted_head_sha -> "current"
-      true -> "stale"
-    end
-  end
 
   defp checks_ready?(pr_state, settings) do
     settings.merge.require_green_checks != true or checks_gate(pr_state) == "pass"

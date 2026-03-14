@@ -283,7 +283,7 @@ Phase behavior:
   - do not restart implementation from scratch
   - inspect current external state and only act if a phase transition or required fix is needed
   - update `symphony.observation.last_observed_at`, `next_intended_action`, and gate summary before yielding
-  - passive PR inspection should refresh `checks`, `human_approval`, `mergeability`, and `head_match`, and may promote `waiting_for_checks` to `waiting_for_human` or `ready_to_merge` when policy gates become satisfied
+  - passive PR inspection should refresh `checks`, `human_approval`, and `mergeability`, and may promote `waiting_for_checks` to `waiting_for_human` or `ready_to_merge` when policy gates become satisfied
   - otherwise stop cleanly and yield back to orchestration
 - `ready_to_merge` / `merging`
   - merge only if rollout mode and merge policy allow it

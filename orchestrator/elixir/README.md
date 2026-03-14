@@ -146,8 +146,8 @@ Notes:
   upserts the durable PR review comment and persists review comment identity plus head-keyed
   pass metadata in the workpad.
 - Passive polling can inspect the persisted PR, refresh live readiness gates (`checks`,
-  `human_approval`, `mergeability`, `head_match`), and promote passive phases toward
-  `waiting_for_human` / `ready_to_merge` without reopening implementation work.
+  `human_approval`, `mergeability`), and promote passive phases toward `waiting_for_human` /
+  `ready_to_merge` without reopening implementation work.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run

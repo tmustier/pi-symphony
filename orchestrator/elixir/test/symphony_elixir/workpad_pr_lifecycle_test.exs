@@ -483,7 +483,6 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert gates["human_approval"] == "required"
       assert gates["mergeability"] == "pass"
       assert gates["review"] == "current"
-      assert gates["head_match"] == "current"
     after
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
