@@ -289,8 +289,6 @@ defmodule SymphonyElixir.Config do
     Map.new(value, fn {key, nested_value} -> {to_string(key), prompt_value(nested_value)} end)
   end
 
-  defp struct_to_prompt_map(_value), do: %{}
-
   defp prompt_value(%_{} = value), do: struct_to_prompt_map(value)
   defp prompt_value(value) when is_map(value), do: struct_to_prompt_map(value)
   defp prompt_value(value) when is_list(value), do: Enum.map(value, &prompt_value/1)

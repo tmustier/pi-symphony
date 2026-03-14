@@ -585,8 +585,6 @@ defmodule SymphonyElixir.Linear.Client do
     }
   end
 
-  defp normalize_issue(_issue, _assignee_filter), do: nil
-
   defp normalize_issue_with_comments(issue, assignee_filter, graphql_fun)
        when is_map(issue) and is_function(graphql_fun, 2) do
     with %Issue{} = normalized_issue <- normalize_issue(issue, assignee_filter),

@@ -636,8 +636,6 @@ defmodule SymphonyElixir.Orchestrator do
     |> Map.get(:dispatch_allowed, true)
   end
 
-  defp dispatch_allowed_by_policy?(_issue), do: false
-
   defp issue_routable_to_worker?(%Issue{assigned_to_worker: assigned_to_worker})
        when is_boolean(assigned_to_worker),
        do: assigned_to_worker
@@ -1445,8 +1443,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp immediate_continuation_allowed?(%Issue{} = issue) do
     OrchestrationPolicy.continuation_allowed?(issue, Config.settings!())
   end
-
-  defp immediate_continuation_allowed?(_issue), do: false
 
   defp update_tracked_issues(%State{} = state, issues) when is_list(issues) do
     observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
