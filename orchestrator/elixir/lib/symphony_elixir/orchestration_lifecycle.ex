@@ -423,21 +423,47 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       human_approval_ready?(issue, settings) != true ->
         {:skip, %{reason: :human_approval_required, next_intended_action: "await_human_approval"}}
 
-      match?({:ok, _pr_info}, pr_result) ->
-        pr_info = elem(pr_result, 1)
-
-        PullRequests.merge_if_head_matches(
-          %{
-            number: Map.get(pr_info, :number),
-            repo_slug: Map.get(pr_info, :repo_slug),
-            url: Map.get(pr_info, :url),
-            expected_head_sha: expected_merge_head_sha(runtime, pr_info, settings)
-          },
-          Keyword.put(opts, :settings, settings)
-        )
-
       true ->
-        pr_result
+        case merge_pr_context(runtime, pr_result, opts, settings) do
+          {:ok, context} ->
+            PullRequests.merge_if_head_matches(context, Keyword.put(opts, :settings, settings))
+
+          {:skip, _details} = skip ->
+            skip
+        end
+    end
+  end
+
+  defp merge_pr_context(runtime, {:ok, pr_info}, _opts, settings) when is_map(pr_info) do
+    {:ok,
+     %{
+       number: Map.get(pr_info, :number),
+       repo_slug: Map.get(pr_info, :repo_slug),
+       url: Map.get(pr_info, :url),
+       expected_head_sha: expected_merge_head_sha(runtime, pr_info, settings)
+     }}
+  end
+
+  defp merge_pr_context(runtime, _pr_result, opts, settings) do
+    pr_metadata = current_pr_metadata(runtime)
+    repo_slug = Keyword.get(opts, :repo_slug)
+
+    context = %{
+      number: Map.get(pr_metadata, "number"),
+      repo_slug: repo_slug,
+      url: Map.get(pr_metadata, "url"),
+      expected_head_sha:
+        expected_merge_head_sha(
+          runtime,
+          %{head_sha: Map.get(pr_metadata, "head_sha")},
+          settings
+        )
+    }
+
+    if is_nil(context.number) and not is_binary(context.url) do
+      {:skip, %{reason: :missing_pr_number, next_intended_action: "record_pr_context"}}
+    else
+      {:ok, context}
     end
   end
 
@@ -641,18 +667,25 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp done_tracker_state(settings) do
-    settings.tracker.terminal_states
-    |> Enum.find(fn state ->
-      case state do
-        value when is_binary(value) -> String.downcase(String.trim(value)) == "done"
-        _ -> false
-      end
-    end)
-    |> case do
-      nil -> "Done"
-      state -> state
-    end
+    terminal_states = Enum.filter(settings.tracker.terminal_states, &is_binary/1)
+
+    find_preferred_terminal_state(terminal_states, ["done", "completed", "closed"]) ||
+      List.first(terminal_states)
   end
+
+  defp find_preferred_terminal_state(terminal_states, preferred_states) do
+    Enum.find_value(preferred_states, fn preferred_state ->
+      Enum.find(terminal_states, &(normalize_tracker_state(&1) == preferred_state))
+    end)
+  end
+
+  defp normalize_tracker_state(state) when is_binary(state) do
+    state
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  defp normalize_tracker_state(_state), do: ""
 
   defp passive_pr_updates(issue, runtime, opts, settings) do
     with true <- runtime.passive_phase == true,
