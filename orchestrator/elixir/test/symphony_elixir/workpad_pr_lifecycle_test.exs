@@ -253,7 +253,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
 
     assert {:ok, result} =
              PullRequests.inspect_state_for_test(
-               %{number: 77, url: "https://github.com/acme/widgets/pull/77"},
+               %{url: "https://github.com/acme/widgets/pull/77"},
                runner: runner
              )
 

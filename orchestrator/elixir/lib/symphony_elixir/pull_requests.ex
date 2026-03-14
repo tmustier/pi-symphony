@@ -401,7 +401,12 @@ defmodule SymphonyElixir.PullRequests do
     url = pick_optional_string([Map.get(pr_context, :url), Map.get(pr_context, "url")])
 
     %{
-      pr_number: normalize_optional_integer(Map.get(pr_context, :number) || Map.get(pr_context, "number")),
+      pr_number:
+        normalize_optional_integer(
+          Map.get(pr_context, :number) ||
+            Map.get(pr_context, "number") ||
+            pr_number_from_pr_url(url)
+        ),
       repo_slug:
         pick_optional_string([
           Keyword.get(opts, :repo_slug),
@@ -677,19 +682,38 @@ defmodule SymphonyElixir.PullRequests do
   defp normalize_optional_integer(_value), do: nil
 
   defp repo_slug_from_pr_url(url) when is_binary(url) do
-    case URI.parse(String.trim(url)) do
-      %URI{host: host, path: path} when host in ["github.com", "www.github.com"] and is_binary(path) ->
-        case String.split(String.trim_leading(path, "/"), "/", trim: true) do
-          [owner, repo, "pull", _number | _rest] -> "#{owner}/#{repo}"
-          _ -> nil
-        end
-
-      _ ->
-        nil
+    case parse_pr_url(url) do
+      {:ok, %{repo_slug: repo_slug}} -> repo_slug
+      _ -> nil
     end
   end
 
   defp repo_slug_from_pr_url(_url), do: nil
+
+  defp pr_number_from_pr_url(url) when is_binary(url) do
+    case parse_pr_url(url) do
+      {:ok, %{pr_number: pr_number}} -> pr_number
+      _ -> nil
+    end
+  end
+
+  defp pr_number_from_pr_url(_url), do: nil
+
+  defp parse_pr_url(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{host: host, path: path} when host in ["github.com", "www.github.com"] and is_binary(path) ->
+        case String.split(String.trim_leading(path, "/"), "/", trim: true) do
+          [owner, repo, "pull", pr_number | _rest] ->
+            {:ok, %{repo_slug: "#{owner}/#{repo}", pr_number: pr_number}}
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
 
   defp pick_optional_string(values) when is_list(values) do
     Enum.find_value(values, fn
