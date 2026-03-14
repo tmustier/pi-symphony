@@ -18,6 +18,6 @@
 │
 \e[1m├─ Passive queue\e[0m
 │
-│  \e[36m◌\e[0m \e[36mMT-880\e[0m \e[36mIn Review | waiting_for_checks | checks_pending | pr=#113@abc123d | merge=attempted@abc123d | next=conf...\e[0m
+│  \e[36m◌\e[0m \e[36mMT-880\e[0m \e[36mIn Review | waiting_for_checks | checks_pending | pr=#113@abc123d | review=r1@abc123d | merge=attempted...\e[0m
 │  \e[31m◌\e[0m \e[36mMT-881\e[0m \e[31mIn Review | blocked | human_approval_required | pr=#112@fedcba6 | merge=merged@fedcba6 | next=reconcile...\e[0m
 ╰─

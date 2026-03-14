@@ -705,6 +705,7 @@ defmodule SymphonyElixir.StatusDashboard do
         phase,
         tracked_wait_summary(entry),
         tracked_pr_summary(entry),
+        tracked_review_summary(entry),
         tracked_merge_summary(entry),
         tracked_next_action_summary(entry)
       ]
@@ -749,6 +750,22 @@ defmodule SymphonyElixir.StatusDashboard do
 
       is_binary(pr_head_sha) and pr_head_sha != "" ->
         "pr=@#{short_sha(pr_head_sha)}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp tracked_review_summary(entry) do
+    passes_completed = map_path(entry, [:workpad, :metadata, "review", "passes_completed"])
+    reviewed_head_sha = present_binary(map_path(entry, [:workpad, :metadata, "review", "last_reviewed_head_sha"]))
+
+    cond do
+      is_integer(passes_completed) and is_binary(reviewed_head_sha) ->
+        "review=r#{passes_completed}@#{short_sha(reviewed_head_sha)}"
+
+      is_integer(passes_completed) ->
+        "review=r#{passes_completed}"
 
       true ->
         nil
