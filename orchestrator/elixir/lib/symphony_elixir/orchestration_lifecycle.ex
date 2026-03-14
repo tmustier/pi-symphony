@@ -114,7 +114,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp lifecycle_updates(issue, runtime, git_state, pr_result, review_result, merge_result, settings, now) do
     branch = pick_string([Map.get(git_state, :branch), issue.branch_name])
     head_sha = pick_string([Map.get(git_state, :head_sha)])
-    base_pr_metadata = pr_metadata(pr_result, head_sha)
+    persisted_pr_metadata = current_pr_metadata(runtime)
+    base_pr_metadata = preserve_pr_metadata(persisted_pr_metadata, pr_metadata(pr_result, head_sha))
     current_pr_metadata = merge_pr_metadata(base_pr_metadata, merge_result)
 
     base_updates =
@@ -232,6 +233,18 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       number: nil,
       url: nil,
       head_sha: fallback_head_sha
+    }
+  end
+
+  defp preserve_pr_metadata(existing_pr_metadata, fresh_pr_metadata) do
+    %{
+      number: Map.get(fresh_pr_metadata, :number) || Map.get(existing_pr_metadata, "number"),
+      url: Map.get(fresh_pr_metadata, :url) || Map.get(existing_pr_metadata, "url"),
+      head_sha:
+        pick_string([
+          Map.get(fresh_pr_metadata, :head_sha),
+          Map.get(existing_pr_metadata, "head_sha")
+        ])
     }
   end
 
