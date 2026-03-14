@@ -366,12 +366,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp passive_pr_updates_from_result({:ok, pr_state}, issue, runtime, settings) when is_map(pr_state) do
+    pr_metadata = %{number: pr_state.number, url: pr_state.url, head_sha: pr_state.head_sha}
     review_status = review_gate(runtime, %{head_sha: pr_state.head_sha}, nil, settings)
-    observation_gates = passive_pr_observation_gates(issue, runtime, pr_state, review_status, settings)
+    observation_gates = passive_pr_observation_gates(issue, pr_metadata, pr_state, review_status, settings)
 
     %{
       phase: passive_phase_after_observation(issue, runtime, pr_state, review_status, settings),
-      pr: %{number: pr_state.number, url: pr_state.url, head_sha: pr_state.head_sha},
+      pr: pr_metadata,
       waiting_reason: passive_waiting_reason(issue, runtime, pr_state, review_status, settings),
       next_intended_action: passive_next_action(issue, runtime, pr_state, review_status, settings),
       observation_gates: observation_gates
@@ -390,14 +391,14 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp passive_pr_updates_from_result(_result, _issue, _runtime, _settings), do: %{}
 
-  defp passive_pr_observation_gates(issue, runtime, pr_state, review_status, settings) do
+  defp passive_pr_observation_gates(issue, pr_metadata, pr_state, review_status, settings) do
     %{
       "pr" => passive_pr_gate(pr_state),
       "review" => review_status,
       "checks" => checks_gate(pr_state),
       "human_approval" => human_approval_gate(issue, settings),
       "mergeability" => mergeability_gate(pr_state),
-      "head_match" => head_match_gate(runtime, pr_state)
+      "head_match" => head_match_gate(pr_metadata, pr_state)
     }
   end
 
@@ -414,20 +415,18 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp passive_waiting_reason(issue, runtime, pr_state, review_status, settings) do
-    waiting_hint = waiting_reason_hint(runtime)
-
     cond do
       passive_pr_gate(pr_state) != "open" -> runtime.waiting_reason
       mergeability_gate(pr_state) == "blocked" -> "mergeability_changed"
-      true -> passive_readiness_waiting_reason(issue, pr_state, review_status, settings, waiting_hint)
+      true -> passive_readiness_waiting_reason(issue, pr_state, review_status, settings)
     end
   end
 
-  defp passive_readiness_waiting_reason(issue, pr_state, review_status, settings, waiting_hint) do
+  defp passive_readiness_waiting_reason(issue, pr_state, review_status, settings) do
     cond do
-      mergeability_ready?(pr_state) != true -> waiting_hint || "checks_pending"
+      mergeability_ready?(pr_state) != true -> "checks_pending"
       checks_ready?(pr_state, settings) != true -> "checks_pending"
-      review_ready?(review_status, settings) != true -> waiting_hint || "checks_pending"
+      review_ready?(review_status, settings) != true -> "checks_pending"
       human_approval_ready?(issue, settings) != true -> "human_approval_required"
       true -> nil
     end
@@ -499,11 +498,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp ready_to_merge_promotion_allowed?(settings), do: settings.rollout.mode in ["mutate", "merge"]
 
-  defp head_match_gate(runtime, %{head_sha: current_head_sha}) do
-    persisted_head_sha =
-      runtime
-      |> current_pr_metadata()
-      |> Map.get("head_sha")
+  defp head_match_gate(pr_metadata, %{head_sha: current_head_sha}) do
+    persisted_head_sha = Map.get(pr_metadata, :head_sha) || Map.get(pr_metadata, "head_sha")
 
     cond do
       not is_binary(current_head_sha) -> "missing"
@@ -516,9 +512,6 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp checks_ready?(pr_state, settings) do
     settings.merge.require_green_checks != true or checks_gate(pr_state) == "pass"
   end
-
-  defp waiting_reason_hint(%{waiting_reason: "observe_only"}), do: nil
-  defp waiting_reason_hint(%{waiting_reason: waiting_reason}), do: waiting_reason
 
   defp review_ready?(_review_status, settings) when settings.review.enabled != true, do: true
   defp review_ready?(review_status, _settings), do: review_status in ["current", "persisted"]
