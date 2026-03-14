@@ -267,7 +267,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     comments
     |> Enum.filter(fn comment ->
       body = comment_field(comment, :body)
-      is_binary(body) and String.contains?(body, marker)
+      workpad_heading_present?(body, marker)
     end)
     |> Enum.sort_by(
       fn comment ->
@@ -280,6 +280,12 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   end
 
   defp matching_workpad_comments(_issue, _marker), do: []
+
+  defp workpad_heading_present?(body, marker) when is_binary(body) and is_binary(marker) do
+    Regex.match?(~r/^\s*#{Regex.escape(marker)}\s*$/m, body)
+  end
+
+  defp workpad_heading_present?(_body, _marker), do: false
 
   defp normalize_comment_timestamp(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
 

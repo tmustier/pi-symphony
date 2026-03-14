@@ -13,13 +13,17 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.Linear.Client
       alias SymphonyElixir.Linear.Issue
+      alias SymphonyElixir.OrchestrationLifecycle
       alias SymphonyElixir.Orchestrator
       alias SymphonyElixir.PromptBuilder
+      alias SymphonyElixir.PullRequests
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
       alias SymphonyElixir.Workflow
       alias SymphonyElixir.WorkflowStore
+      alias SymphonyElixir.Workpad
       alias SymphonyElixir.Workspace
+      alias SymphonyElixir.WorkspaceGit
 
       import SymphonyElixir.TestSupport,
         only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]

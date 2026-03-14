@@ -235,6 +235,7 @@ defmodule SymphonyElixirWeb.Presenter do
     |> maybe_put(:marker, fetch_value(workpad, :marker))
     |> maybe_put(:marker_found, fetch_value(workpad, :marker_found))
     |> maybe_put(:comment_id, fetch_value(workpad, :comment_id))
+    |> maybe_put(:matched_comment_ids, fetch_value(workpad, :matched_comment_ids))
     |> maybe_put(:metadata_status, fetch_value(workpad, :metadata_status))
     |> maybe_put(:phase_source, fetch_value(workpad, :phase_source))
     |> maybe_put(:waiting_reason, fetch_value(workpad, :waiting_reason))
