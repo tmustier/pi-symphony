@@ -222,10 +222,6 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     if current_head_sha == last_reviewed_head_sha, do: "current", else: "stale"
   end
 
-  defp review_head_state(_current_head_sha, _last_reviewed_head_sha, passes_completed)
-       when passes_completed > 0,
-       do: "current"
-
   defp review_head_state(_current_head_sha, _last_reviewed_head_sha, _passes_completed), do: "missing"
 
   defp maybe_persist_review_comment(_issue, runtime, pr_result, running_entry, opts, settings) do

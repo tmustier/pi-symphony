@@ -224,20 +224,70 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp find_existing_review_comment(context, runner) do
-    with {:ok, comments} <- list_issue_comments(context.repo_slug, context.pr_number, runner) do
-      matched_comment =
-        Enum.find(comments, fn comment ->
-          comment.id == context.comment_id or
-            (is_binary(comment.body) and String.contains?(comment.body, context.marker))
-        end)
+    with {:ok, direct_match} <- fetch_issue_comment_by_id(context, runner),
+         {:ok, marker_match} <- fetch_issue_comment_by_marker(context, runner, direct_match) do
+      {:ok, direct_match || marker_match}
+    end
+  end
 
-      {:ok, matched_comment}
+  defp fetch_issue_comment_by_id(%{comment_id: comment_id} = context, runner) when is_integer(comment_id) do
+    case fetch_issue_comment(context.repo_slug, comment_id, runner) do
+      {:ok, comment} -> {:ok, comment}
+      {:error, reason} when reason in [:issue_comment_not_found, {404, ""}] -> {:ok, nil}
+      {:error, {404, _output}} -> {:ok, nil}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fetch_issue_comment_by_id(_context, _runner), do: {:ok, nil}
+
+  defp fetch_issue_comment_by_marker(_context, _runner, %{} = direct_match), do: {:ok, direct_match}
+
+  defp fetch_issue_comment_by_marker(context, runner, _direct_match) do
+    with {:ok, comments} <- list_issue_comments(context.repo_slug, context.pr_number, runner) do
+      {:ok,
+       Enum.find(comments, fn comment ->
+         is_binary(comment.body) and String.contains?(comment.body, context.marker)
+       end)}
+    end
+  end
+
+  defp fetch_issue_comment(repo_slug, comment_id, runner)
+       when is_binary(repo_slug) and is_integer(comment_id) and is_function(runner, 3) do
+    args = ["api", "repos/#{repo_slug}/issues/comments/#{comment_id}"]
+
+    with {:ok, output} <- runner.("gh", args, []),
+         {:ok, comment} <- Jason.decode(output) do
+      {:ok, normalize_issue_comment(comment)}
+    else
+      {:error, {404, _output}} -> {:error, :issue_comment_not_found}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_issue_comment_response}
     end
   end
 
   defp list_issue_comments(repo_slug, pr_number, runner)
        when is_binary(repo_slug) and is_integer(pr_number) and is_function(runner, 3) do
-    args = ["api", "repos/#{repo_slug}/issues/#{pr_number}/comments?per_page=100"]
+    fetch_issue_comment_pages(repo_slug, pr_number, 1, [], runner)
+  end
+
+  defp fetch_issue_comment_pages(repo_slug, pr_number, page, acc, runner)
+       when is_binary(repo_slug) and is_integer(pr_number) and is_integer(page) and is_list(acc) and
+              is_function(runner, 3) do
+    with {:ok, comments} <- fetch_issue_comment_page(repo_slug, pr_number, page, runner) do
+      next_acc = acc ++ comments
+
+      if length(comments) < 100 do
+        {:ok, next_acc}
+      else
+        fetch_issue_comment_pages(repo_slug, pr_number, page + 1, next_acc, runner)
+      end
+    end
+  end
+
+  defp fetch_issue_comment_page(repo_slug, pr_number, page, runner)
+       when is_binary(repo_slug) and is_integer(pr_number) and is_integer(page) and is_function(runner, 3) do
+    args = ["api", "repos/#{repo_slug}/issues/#{pr_number}/comments?per_page=100&page=#{page}"]
 
     with {:ok, output} <- runner.("gh", args, []),
          {:ok, comments} <- Jason.decode(output) do

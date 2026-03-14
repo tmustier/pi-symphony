@@ -279,9 +279,70 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
 
     assert result.action == :updated
     assert result.comment_id == 321
-    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/77/comments?per_page=100"]}
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/77/comments?per_page=100&page=1"]}
     assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/comments/321", "--method", "PATCH", "-f", body_arg]}
     assert String.contains?(body_arg, "body=<!-- symphony-review -->")
+  end
+
+  test "pull requests paginate marker lookup when the durable review comment is beyond the first page" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      pr_review_comment_mode: "upsert"
+    )
+
+    first_page =
+      Enum.map(1..100, fn index ->
+        %{
+          "id" => index,
+          "body" => "Regular comment #{index}",
+          "html_url" => "https://github.com/acme/widgets/pull/77#issuecomment-#{index}"
+        }
+      end)
+
+    Process.put(:github_runner_results, [
+      {:ok, Jason.encode!(first_page)},
+      {:ok,
+       Jason.encode!([
+         %{
+           "id" => 321,
+           "body" => "<!-- symphony-review -->\n\nPrevious review",
+           "html_url" => "https://github.com/acme/widgets/pull/77#issuecomment-321"
+         }
+       ])},
+      {:ok,
+       Jason.encode!(%{
+         "id" => 321,
+         "body" => "<!-- symphony-review -->\n\nUpdated review",
+         "html_url" => "https://github.com/acme/widgets/pull/77#issuecomment-321"
+       })}
+    ])
+
+    runner = fn command, args, _opts ->
+      send(self(), {:github_command, command, args})
+
+      case Process.get(:github_runner_results) do
+        [result | rest] ->
+          Process.put(:github_runner_results, rest)
+          result
+
+        _ ->
+          {:error, :no_github_result}
+      end
+    end
+
+    assert {:ok, result} =
+             PullRequests.upsert_review_comment_for_test(
+               %{number: 77, repo_slug: "acme/widgets"},
+               "Updated review",
+               runner: runner
+             )
+
+    assert result.action == :updated
+    assert result.comment_id == 321
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/77/comments?per_page=100&page=1"]}
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/77/comments?per_page=100&page=2"]}
+    assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/comments/321", "--method", "PATCH", "-f", _body_arg]}
   end
 
   test "post-run lifecycle persists review comment metadata from workspace artifacts" do
@@ -391,7 +452,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert runtime.workpad.metadata["review"]["passes_completed"] == 1
       assert runtime.workpad.metadata["review"]["last_reviewed_head_sha"] == String.trim(head_sha)
       assert runtime.workpad.metadata["observation"]["gates"]["review"] == "persisted"
-      assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/88/comments?per_page=100"]}
+      assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/88/comments?per_page=100&page=1"]}
       assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/88/comments", "--method", "POST", "-f", _body]}
     after
       File.rm_rf(test_root)
@@ -480,13 +541,11 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
            }
          ])},
         {:ok,
-         Jason.encode!([
-           %{
-             "id" => 555,
-             "body" => "<!-- symphony-review -->\n\nOld review",
-             "html_url" => "https://github.com/acme/widgets/pull/90#issuecomment-555"
-           }
-         ])},
+         Jason.encode!(%{
+           "id" => 555,
+           "body" => "<!-- symphony-review -->\n\nOld review",
+           "html_url" => "https://github.com/acme/widgets/pull/90#issuecomment-555"
+         })},
         {:ok,
          Jason.encode!(%{
            "id" => 555,
@@ -525,6 +584,98 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     after
       File.rm_rf(test_root)
 
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle marks review continuity as missing when the current head sha is unavailable" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    issue = %Issue{
+      id: "issue-review-head-missing",
+      identifier: "MT-704Y",
+      state: "In Review",
+      title: "Handle missing head continuity",
+      description: "Review gates should not report current without a known head",
+      url: "https://example.org/issues/MT-704Y",
+      branch_name: "feature/review-head-missing",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/review-head-missing\n  pr:\n    number: 91\n    url: https://github.com/acme/widgets/pull/91\n    head_sha: null\n  review:\n    comment_id: 555\n    passes_completed: 1\n    last_reviewed_head_sha: abc123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 91,
+             "url" => "https://github.com/acme/widgets/pull/91",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-head-missing",
+             "headRefOid" => nil,
+             "baseRefName" => "main"
+           }
+         ])}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-head-missing"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-head-missing",
+                 %{workspace_path: nil, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.workpad.metadata["observation"]["gates"]["review"] == "missing"
+    after
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
         else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
