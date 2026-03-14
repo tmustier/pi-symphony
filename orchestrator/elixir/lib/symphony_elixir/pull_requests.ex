@@ -25,7 +25,7 @@ defmodule SymphonyElixir.PullRequests do
         {:skip, %{reason: :missing_branch, next_intended_action: "record_branch_context"}}
 
       true ->
-        with {:ok, prs} <- list_branch_pull_requests(context.repo_slug, context.branch, runner) do
+        with {:ok, prs} <- list_branch_pull_requests(context.repo_slug, context.branch, context.base_branch, runner) do
           resolve_from_existing_prs(issue, context, prs, settings, runner)
         end
     end
@@ -115,7 +115,8 @@ defmodule SymphonyElixir.PullRequests do
 
   defp reopen_closed_pr(closed_pr, context, settings, runner) do
     with :ok <- reopen_pull_request(closed_pr.number, context.repo_slug, runner),
-         {:ok, prs_after_reopen} <- list_branch_pull_requests(context.repo_slug, context.branch, runner),
+         {:ok, prs_after_reopen} <-
+           list_branch_pull_requests(context.repo_slug, context.branch, context.base_branch, runner),
          %{} = reopened_pr <- Enum.find(prs_after_reopen, &(&1.state == "OPEN")),
          :ok <- maybe_ensure_required_labels(reopened_pr, context.repo_slug, settings, true, runner) do
       {:ok, pr_success(reopened_pr, context, :reopened)}
@@ -127,7 +128,8 @@ defmodule SymphonyElixir.PullRequests do
 
   defp create_new_pull_request(issue, context, settings, runner) do
     with :ok <- create_pull_request(issue, context, settings, runner),
-         {:ok, prs_after_create} <- list_branch_pull_requests(context.repo_slug, context.branch, runner),
+         {:ok, prs_after_create} <-
+           list_branch_pull_requests(context.repo_slug, context.branch, context.base_branch, runner),
          %{} = created_pr <- Enum.find(prs_after_create, &(&1.state == "OPEN")),
          :ok <- maybe_ensure_required_labels(created_pr, context.repo_slug, settings, true, runner) do
       {:ok, pr_success(created_pr, context, :created)}
@@ -170,9 +172,23 @@ defmodule SymphonyElixir.PullRequests do
     }
   end
 
-  defp list_branch_pull_requests(repo_slug, branch, runner)
-       when is_binary(repo_slug) and is_binary(branch) and is_function(runner, 3) do
-    args = ["pr", "list", "--repo", repo_slug, "--head", branch, "--state", "all", "--json", "number,url,state,isDraft,headRefName,headRefOid,baseRefName"]
+  defp list_branch_pull_requests(repo_slug, branch, base_branch, runner)
+       when is_binary(repo_slug) and is_binary(branch) and is_binary(base_branch) and
+              is_function(runner, 3) do
+    args = [
+      "pr",
+      "list",
+      "--repo",
+      repo_slug,
+      "--head",
+      branch,
+      "--base",
+      base_branch,
+      "--state",
+      "all",
+      "--json",
+      "number,url,state,isDraft,headRefName,headRefOid,baseRefName"
+    ]
 
     with {:ok, output} <- runner.("gh", args, []),
          {:ok, prs} <- Jason.decode(output) do

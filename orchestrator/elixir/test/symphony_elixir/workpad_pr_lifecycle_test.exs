@@ -70,12 +70,18 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
 
     assert {:ok, pr_info} =
-             PullRequests.resolve_or_create_for_test(issue, %{repo_slug: "acme/widgets", branch: "feature/reuse-pr"}, runner: runner)
+             PullRequests.resolve_or_create_for_test(
+               issue,
+               %{repo_slug: "acme/widgets", branch: "feature/reuse-pr"},
+               runner: runner
+             )
 
     assert pr_info.action == :reused
     assert pr_info.number == 42
     assert pr_info.url == "https://github.com/acme/widgets/pull/42"
-    assert_receive {:github_command, "gh", ["pr", "list" | _]}
+    assert_receive {:github_command, "gh", args}
+    assert Enum.take(args, 2) == ["pr", "list"]
+    assert Enum.any?(Enum.chunk_every(args, 2, 1, :discard), &(&1 == ["--base", "main"]))
   end
 
   test "pull requests create a branch PR when none exists and mutation is allowed" do
