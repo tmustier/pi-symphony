@@ -358,7 +358,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     pr_url = Map.get(pr_metadata, "url")
     repo_slug = Keyword.get(opts, :repo_slug)
 
-    if is_integer(pr_number) or (is_binary(pr_number) and String.trim(pr_number) != "") do
+    if is_integer(pr_number) or (is_binary(pr_number) and String.trim(pr_number) != "") or is_binary(pr_url) do
       {:ok, %{number: pr_number, url: pr_url, repo_slug: repo_slug}}
     else
       {:skip, %{reason: :missing_pr_number}}

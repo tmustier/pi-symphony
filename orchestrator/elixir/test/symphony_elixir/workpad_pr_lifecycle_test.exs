@@ -425,7 +425,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
         %{
           id: "comment-1",
           body:
-            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/passive-pr-human\n  pr:\n    number: 100\n    url: https://github.com/acme/widgets/pull/100\n    head_sha: stale123\n  review:\n    passes_completed: 1\n    last_reviewed_head_sha: fresh123\n```",
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/passive-pr-human\n  pr:\n    url: https://github.com/acme/widgets/pull/100\n    head_sha: stale123\n  review:\n    passes_completed: 1\n    last_reviewed_head_sha: fresh123\n```",
           updated_at: DateTime.utc_now()
         }
       ]
@@ -476,6 +476,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert runtime.phase == "waiting_for_human"
       assert runtime.waiting_reason == "human_approval_required"
       assert runtime.next_intended_action == "await_human_approval"
+      assert runtime.workpad.metadata["pr"]["number"] == 100
       assert runtime.workpad.metadata["pr"]["head_sha"] == "fresh123"
       assert gates["pr"] == "open"
       assert gates["checks"] == "pass"
