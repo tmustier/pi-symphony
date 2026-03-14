@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.{PathSafety, Workflow}
+  alias SymphonyElixir.{OrchestrationPolicy, PathSafety, Workflow}
 
   @primary_key false
 
@@ -265,6 +265,169 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule OrchestrationOwnership do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:required_label, :string)
+      field(:required_workpad_marker, :string)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:required_label, :required_workpad_marker], empty_values: [])
+    end
+  end
+
+  defmodule Orchestration do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema.OrchestrationOwnership
+
+    @primary_key false
+    embedded_schema do
+      field(:phase_store, :string, default: "workpad")
+      field(:default_phase, :string, default: "implementing")
+      field(:passive_phases, {:array, :string}, default: OrchestrationPolicy.passive_default_phases())
+      field(:max_rework_cycles, :integer, default: 3)
+      embeds_one(:ownership, OrchestrationOwnership, on_replace: :update, defaults_to_struct: true)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:phase_store, :default_phase, :passive_phases, :max_rework_cycles], empty_values: [])
+      |> cast_embed(:ownership, with: &OrchestrationOwnership.changeset/2)
+      |> validate_inclusion(:phase_store, ["workpad"])
+      |> validate_number(:max_rework_cycles, greater_than: 0)
+    end
+  end
+
+  defmodule Rollout do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:mode, :string, default: "mutate")
+      field(:preflight_required, :boolean, default: false)
+      field(:kill_switch_label, :string)
+      field(:kill_switch_file, :string)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:mode, :preflight_required, :kill_switch_label, :kill_switch_file], empty_values: [])
+      |> validate_inclusion(:mode, OrchestrationPolicy.rollout_modes())
+    end
+  end
+
+  defmodule Pr do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:auto_create, :boolean, default: false)
+      field(:base_branch, :string, default: "main")
+      field(:reuse_branch_pr, :boolean, default: true)
+      field(:closed_pr_policy, :string, default: "new_branch")
+      field(:attach_to_tracker, :boolean, default: true)
+      field(:required_labels, {:array, :string}, default: [])
+      field(:review_comment_mode, :string, default: "off")
+      field(:review_comment_marker, :string, default: "<!-- symphony-review -->")
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(
+        attrs,
+        [
+          :auto_create,
+          :base_branch,
+          :reuse_branch_pr,
+          :closed_pr_policy,
+          :attach_to_tracker,
+          :required_labels,
+          :review_comment_mode,
+          :review_comment_marker
+        ],
+        empty_values: []
+      )
+      |> validate_inclusion(:closed_pr_policy, OrchestrationPolicy.closed_pr_policies())
+      |> validate_inclusion(:review_comment_mode, OrchestrationPolicy.review_comment_modes())
+    end
+  end
+
+  defmodule Review do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:agent, :string)
+      field(:output_format, :string)
+      field(:max_passes, :integer, default: 1)
+      field(:fix_consideration_severities, {:array, :string}, default: [])
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:enabled, :agent, :output_format, :max_passes, :fix_consideration_severities], empty_values: [])
+      |> validate_number(:max_passes, greater_than: 0)
+    end
+  end
+
+  defmodule Merge do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:mode, :string, default: "disabled")
+      field(:executor, :string)
+      field(:method, :string, default: "squash")
+      field(:require_green_checks, :boolean, default: true)
+      field(:require_head_match, :boolean, default: true)
+      field(:require_human_approval, :boolean, default: true)
+      field(:approval_states, {:array, :string}, default: [])
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(
+        attrs,
+        [
+          :mode,
+          :executor,
+          :method,
+          :require_green_checks,
+          :require_head_match,
+          :require_human_approval,
+          :approval_states
+        ],
+        empty_values: []
+      )
+      |> validate_inclusion(:mode, OrchestrationPolicy.merge_modes())
+      |> validate_inclusion(:method, OrchestrationPolicy.merge_methods())
+    end
+  end
+
   defmodule Hooks do
     @moduledoc false
     use Ecto.Schema
@@ -335,6 +498,11 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:pi, Pi, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:orchestration, Orchestration, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:rollout, Rollout, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:pr, Pr, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:review, Review, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:merge, Merge, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
@@ -342,17 +510,26 @@ defmodule SymphonyElixir.Config.Schema do
 
   @spec parse(map()) :: {:ok, %__MODULE__{}} | {:error, {:invalid_workflow_config, String.t()}}
   def parse(config) when is_map(config) do
-    config
-    |> normalize_keys()
-    |> drop_nil_values()
-    |> changeset()
-    |> apply_action(:validate)
-    |> case do
-      {:ok, settings} ->
-        {:ok, finalize_settings(settings)}
+    normalized_config =
+      config
+      |> normalize_keys()
+      |> drop_nil_values()
 
-      {:error, changeset} ->
-        {:error, {:invalid_workflow_config, format_errors(changeset)}}
+    case validate_policy_unknown_keys(normalized_config) do
+      :ok ->
+        normalized_config
+        |> changeset()
+        |> apply_action(:validate)
+        |> case do
+          {:ok, settings} ->
+            {:ok, finalize_settings(settings)}
+
+          {:error, changeset} ->
+            {:error, {:invalid_workflow_config, format_errors(changeset)}}
+        end
+
+      {:error, message} ->
+        {:error, {:invalid_workflow_config, message}}
     end
   end
 
@@ -428,6 +605,11 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:pi, with: &Pi.changeset/2)
+    |> cast_embed(:orchestration, with: &Orchestration.changeset/2)
+    |> cast_embed(:rollout, with: &Rollout.changeset/2)
+    |> cast_embed(:pr, with: &Pr.changeset/2)
+    |> cast_embed(:review, with: &Review.changeset/2)
+    |> cast_embed(:merge, with: &Merge.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
@@ -459,7 +641,61 @@ defmodule SymphonyElixir.Config.Schema do
         model: normalize_pi_model(settings.pi.model)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex, pi: pi}
+    orchestration = %{
+      settings.orchestration
+      | phase_store: normalize_optional_string(settings.orchestration.phase_store) || "workpad",
+        default_phase: normalize_optional_string(settings.orchestration.default_phase) || "implementing",
+        passive_phases: normalize_string_list(settings.orchestration.passive_phases),
+        ownership: %{
+          settings.orchestration.ownership
+          | required_label: normalize_optional_string(settings.orchestration.ownership.required_label),
+            required_workpad_marker: normalize_optional_string(settings.orchestration.ownership.required_workpad_marker)
+        }
+    }
+
+    rollout = %{
+      settings.rollout
+      | mode: normalize_optional_string(settings.rollout.mode) || "mutate",
+        kill_switch_label: normalize_optional_string(settings.rollout.kill_switch_label),
+        kill_switch_file: normalize_optional_path(settings.rollout.kill_switch_file)
+    }
+
+    pr = %{
+      settings.pr
+      | base_branch: normalize_optional_string(settings.pr.base_branch) || "main",
+        closed_pr_policy: normalize_optional_string(settings.pr.closed_pr_policy) || "new_branch",
+        required_labels: normalize_string_list(settings.pr.required_labels),
+        review_comment_mode: normalize_optional_string(settings.pr.review_comment_mode) || "off",
+        review_comment_marker: normalize_optional_string(settings.pr.review_comment_marker)
+    }
+
+    review = %{
+      settings.review
+      | agent: normalize_optional_string(settings.review.agent),
+        output_format: normalize_optional_string(settings.review.output_format),
+        fix_consideration_severities: normalize_string_list(settings.review.fix_consideration_severities)
+    }
+
+    merge = %{
+      settings.merge
+      | mode: normalize_optional_string(settings.merge.mode) || "disabled",
+        executor: normalize_optional_string(settings.merge.executor),
+        method: normalize_optional_string(settings.merge.method) || "squash",
+        approval_states: normalize_string_list(settings.merge.approval_states)
+    }
+
+    %{
+      settings
+      | tracker: tracker,
+        workspace: workspace,
+        codex: codex,
+        pi: pi,
+        orchestration: orchestration,
+        rollout: rollout,
+        pr: pr,
+        review: review,
+        merge: merge
+    }
   end
 
   defp normalize_keys(value) when is_map(value) do
@@ -552,6 +788,28 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp normalize_pi_thinking_level(value) when is_binary(value), do: normalize_optional_string(value)
   defp normalize_pi_thinking_level(_value), do: nil
+
+  defp normalize_string_list(values) when is_list(values) do
+    values
+    |> Enum.map(&normalize_optional_string/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_string_list(_values), do: []
+
+  defp normalize_optional_path(value) when is_binary(value) do
+    workflow_dir = Workflow.workflow_file_path() |> Path.dirname() |> Path.expand()
+
+    value
+    |> normalize_optional_string()
+    |> case do
+      nil -> nil
+      trimmed -> Path.expand(trimmed, workflow_dir)
+    end
+  end
+
+  defp normalize_optional_path(_value), do: nil
 
   defp normalize_optional_string(value) when is_binary(value) do
     case String.trim(value) do
@@ -669,6 +927,49 @@ defmodule SymphonyElixir.Config.Schema do
   defp expand_local_workspace_root(_workspace_root) do
     Path.expand(Path.join(System.tmp_dir!(), "symphony_workspaces"))
   end
+
+  defp validate_policy_unknown_keys(config) when is_map(config) do
+    checks = [
+      {"orchestration", ["phase_store", "default_phase", "passive_phases", "max_rework_cycles", "ownership"]},
+      {"orchestration.ownership", ["required_label", "required_workpad_marker"]},
+      {"rollout", ["mode", "preflight_required", "kill_switch_label", "kill_switch_file"]},
+      {"pr", ["auto_create", "base_branch", "reuse_branch_pr", "closed_pr_policy", "attach_to_tracker", "required_labels", "review_comment_mode", "review_comment_marker"]},
+      {"review", ["enabled", "agent", "output_format", "max_passes", "fix_consideration_severities"]},
+      {"merge", ["mode", "executor", "method", "require_green_checks", "require_head_match", "require_human_approval", "approval_states"]}
+    ]
+
+    case Enum.find_value(checks, &unknown_key_error(config, &1)) do
+      nil -> :ok
+      message -> {:error, message}
+    end
+  end
+
+  defp unknown_key_error(config, {path, allowed_keys}) do
+    case get_path(config, String.split(path, ".")) do
+      %{} = section ->
+        section
+        |> Map.keys()
+        |> Enum.reject(&(&1 in allowed_keys))
+        |> Enum.sort()
+        |> case do
+          [] -> nil
+          unknown_keys -> "#{path} has unknown keys: #{Enum.join(unknown_keys, ", ")}"
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp get_path(value, []), do: value
+
+  defp get_path(value, [segment | rest]) when is_map(value) do
+    value
+    |> Map.get(segment)
+    |> get_path(rest)
+  end
+
+  defp get_path(_value, _segments), do: nil
 
   defp format_errors(changeset) do
     changeset

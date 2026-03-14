@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.{Config, OrchestrationPolicy, Workflow}
 
   @render_opts [strict_variables: true, strict_filters: true]
 
@@ -14,11 +14,14 @@ defmodule SymphonyElixir.PromptBuilder do
       |> prompt_template!()
       |> parse_template!()
 
+    settings = Config.settings!()
+
     template
     |> Solid.render!(
       %{
         "attempt" => Keyword.get(opts, :attempt),
-        "issue" => issue |> Map.from_struct() |> to_solid_map()
+        "issue" => issue_prompt_map(issue, settings),
+        "policy" => Config.prompt_policy()
       },
       @render_opts
     )
@@ -39,6 +42,13 @@ defmodule SymphonyElixir.PromptBuilder do
                 message: "template_parse_error: #{Exception.message(error)} template=#{inspect(prompt)}"
               },
               __STACKTRACE__
+  end
+
+  defp issue_prompt_map(issue, settings) do
+    issue
+    |> Map.from_struct()
+    |> Map.put(:symphony, OrchestrationPolicy.issue_runtime(issue, settings))
+    |> to_solid_map()
   end
 
   defp to_solid_map(map) when is_map(map) do

@@ -102,6 +102,14 @@ agent:
   max_turns: 20
 codex:
   command: codex app-server
+orchestration:
+  default_phase: implementing
+  passive_phases:
+    - waiting_for_checks
+    - waiting_for_human
+    - blocked
+rollout:
+  mode: mutate
 ---
 
 You are working on a Linear issue {{ issue.identifier }}.
@@ -123,6 +131,12 @@ Notes:
   Symphony validation.
 - `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
+- `orchestration.default_phase` and `orchestration.passive_phases` let Symphony distinguish active
+  continuation from passive waiting without overloading tracker states alone.
+- `rollout.mode` exposes the intended automation stage (`observe`, `mutate`, `merge`) to policy-aware
+  workflow prompts.
+- `policy.*` values are now available to Liquid templates, along with derived `issue.symphony.*`
+  runtime fields such as `phase`, `passive_phase`, ownership gates, and kill-switch state.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run

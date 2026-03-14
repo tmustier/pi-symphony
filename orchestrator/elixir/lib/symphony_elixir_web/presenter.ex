@@ -11,14 +11,18 @@ defmodule SymphonyElixirWeb.Presenter do
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
+        tracked = Map.get(snapshot, :tracked, [])
+
         %{
           generated_at: generated_at,
           counts: %{
             running: length(snapshot.running),
-            retrying: length(snapshot.retrying)
+            retrying: length(snapshot.retrying),
+            tracked: length(tracked)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
+          tracked: Enum.map(tracked, &tracked_entry_payload/1),
           worker_totals: snapshot.codex_totals,
           codex_totals: snapshot.codex_totals,
           rate_limits: snapshot.rate_limits
@@ -38,11 +42,12 @@ defmodule SymphonyElixirWeb.Presenter do
       %{} = snapshot ->
         running = Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
         retry = Enum.find(snapshot.retrying, &(&1.identifier == issue_identifier))
+        tracked = snapshot |> Map.get(:tracked, []) |> Enum.find(&(&1.issue_identifier == issue_identifier))
 
-        if is_nil(running) and is_nil(retry) do
+        if is_nil(running) and is_nil(retry) and is_nil(tracked) do
           {:error, :issue_not_found}
         else
-          {:ok, issue_payload_body(issue_identifier, running, retry)}
+          {:ok, issue_payload_body(issue_identifier, running, retry, tracked)}
         end
 
       _ ->
@@ -61,11 +66,11 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  defp issue_payload_body(issue_identifier, running, retry) do
+  defp issue_payload_body(issue_identifier, running, retry, tracked) do
     %{
       issue_identifier: issue_identifier,
-      issue_id: issue_id_from_entries(running, retry),
-      status: issue_status(running, retry),
+      issue_id: issue_id_from_entries(running, retry, tracked),
+      status: issue_status(running, retry, tracked),
       workspace: %{
         path: workspace_path(issue_identifier, running, retry),
         host: workspace_host(running, retry)
@@ -82,20 +87,20 @@ defmodule SymphonyElixirWeb.Presenter do
       },
       recent_events: (running && recent_events_payload(running)) || [],
       last_error: retry && retry.error,
-      tracked: %{}
+      tracked: (tracked && tracked_issue_payload(tracked)) || %{}
     }
   end
 
-  defp issue_id_from_entries(running, retry),
-    do: (running && running.issue_id) || (retry && retry.issue_id)
+  defp issue_id_from_entries(running, retry, tracked),
+    do: (running && running.issue_id) || (retry && retry.issue_id) || (tracked && tracked.issue_id)
 
   defp restart_count(retry), do: max(retry_attempt(retry) - 1, 0)
   defp retry_attempt(nil), do: 0
   defp retry_attempt(retry), do: retry.attempt || 0
 
-  defp issue_status(_running, nil), do: "running"
-  defp issue_status(nil, _retry), do: "retrying"
-  defp issue_status(_running, _retry), do: "running"
+  defp issue_status(running, _retry, _tracked) when not is_nil(running), do: "running"
+  defp issue_status(nil, retry, _tracked) when not is_nil(retry), do: "retrying"
+  defp issue_status(nil, nil, tracked) when not is_nil(tracked), do: "tracked"
 
   defp running_entry_payload(entry) do
     %{
@@ -135,6 +140,28 @@ defmodule SymphonyElixirWeb.Presenter do
     |> maybe_put(:session_dir, Map.get(entry, :session_dir))
     |> maybe_put(:proof, proof_payload(entry))
   end
+
+  defp tracked_entry_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.issue_identifier,
+      state: entry.state,
+      labels: Map.get(entry, :labels, []),
+      phase: Map.get(entry, :phase),
+      phase_source: Map.get(entry, :phase_source),
+      passive_phase: Map.get(entry, :passive_phase, false),
+      rollout_mode: Map.get(entry, :rollout_mode),
+      dispatch_allowed: Map.get(entry, :dispatch_allowed, false),
+      waiting_reason: Map.get(entry, :waiting_reason),
+      next_intended_action: Map.get(entry, :next_intended_action),
+      observed_at: iso8601(Map.get(entry, :observed_at)),
+      ownership: Map.get(entry, :ownership, %{}),
+      kill_switch: Map.get(entry, :kill_switch, %{}),
+      workpad: tracked_workpad_payload(Map.get(entry, :workpad, %{}))
+    }
+  end
+
+  defp tracked_issue_payload(entry), do: tracked_entry_payload(entry)
 
   defp running_issue_payload(running) do
     %{
@@ -200,6 +227,25 @@ defmodule SymphonyElixirWeb.Presenter do
     |> case do
       proof when map_size(proof) == 0 -> nil
       proof -> proof
+    end
+  end
+
+  defp tracked_workpad_payload(workpad) when is_map(workpad) do
+    %{}
+    |> maybe_put(:marker, fetch_value(workpad, :marker))
+    |> maybe_put(:marker_found, fetch_value(workpad, :marker_found))
+    |> maybe_put(:comment_id, fetch_value(workpad, :comment_id))
+    |> maybe_put(:metadata_status, fetch_value(workpad, :metadata_status))
+    |> maybe_put(:phase_source, fetch_value(workpad, :phase_source))
+    |> maybe_put(:waiting_reason, fetch_value(workpad, :waiting_reason))
+  end
+
+  defp tracked_workpad_payload(_workpad), do: %{}
+
+  defp fetch_value(map, key) when is_map(map) and is_atom(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, Atom.to_string(key))
     end
   end
 

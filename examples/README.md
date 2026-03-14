@@ -20,8 +20,10 @@ Typical flow:
 3. Set `tracker.team_key` in the copied workflow to the Linear team you want to scope to
 4. Optionally set `tracker.project_slug` / `LINEAR_PROJECT_SLUG` if you want an extra project-level boundary inside that team
 5. Choose the Pi worker model and thinking level under `pi.model` / `pi.thinking_level`
-6. Adjust polling / concurrency / prompt instructions for that repo
-7. Start the orchestrator
+6. Decide the rollout stage under `rollout.mode` (`observe`, `mutate`, or `merge`)
+7. Adjust ownership / kill-switch / review policy sections for that repo
+8. Use `policy.*` and `issue.symphony.*` in the prompt body when you want policy-aware templates
+9. Start the orchestrator
 
 ## Important path note
 

@@ -342,7 +342,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
-             "counts" => %{"running" => 1, "retrying" => 1},
+             "counts" => %{"running" => 1, "retrying" => 1, "tracked" => 0},
              "running" => [
                %{
                  "issue_id" => "issue-http",
@@ -384,6 +384,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  }
                }
              ],
+             "tracked" => [],
              "worker_totals" => %{
                "input_tokens" => 4,
                "output_tokens" => 8,
@@ -452,6 +453,104 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert %{"queued" => true, "coalesced" => false, "operations" => ["poll", "reconcile"]} =
              json_response(conn, 202)
+  end
+
+  test "phoenix observability api exposes tracked passive issues" do
+    snapshot = %{
+      running: [],
+      retrying: [],
+      tracked: [
+        %{
+          issue_id: "issue-tracked",
+          issue_identifier: "MT-TRACKED",
+          state: "In Review",
+          labels: ["symphony"],
+          phase: "waiting_for_checks",
+          phase_source: "workpad",
+          passive_phase: true,
+          rollout_mode: "observe",
+          dispatch_allowed: false,
+          waiting_reason: "checks_pending",
+          next_intended_action: "poll_on_next_cycle",
+          observed_at: DateTime.utc_now(),
+          ownership: %{allowed: true, label_present: true, workpad_present: true},
+          kill_switch: %{active: false, label_active: false, file_active: false},
+          workpad: %{
+            marker: "## Symphony Workpad",
+            marker_found: true,
+            comment_id: "comment-1",
+            metadata_status: "ok",
+            phase_source: "workpad",
+            waiting_reason: "checks_pending"
+          }
+        }
+      ],
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      rate_limits: nil
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :TrackedObservabilityOrchestrator)
+    {:ok, _pid} = start_supervised({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+    start_test_endpoint(orchestrator: orchestrator_name)
+
+    conn = get(build_conn(), "/api/v1/state")
+    state_payload = json_response(conn, 200)
+    assert state_payload["counts"]["tracked"] == 1
+    assert state_payload["tracked"] |> List.first() |> Map.fetch!("phase") == "waiting_for_checks"
+
+    conn = get(build_conn(), "/api/v1/MT-TRACKED")
+    issue_payload = json_response(conn, 200)
+    assert issue_payload["status"] == "tracked"
+    assert issue_payload["tracked"]["phase"] == "waiting_for_checks"
+    assert issue_payload["tracked"]["workpad"]["metadata_status"] == "ok"
+  end
+
+  test "phoenix observability api preserves retry status when tracked data is also present" do
+    snapshot = %{
+      running: [],
+      retrying: [
+        %{
+          issue_id: "issue-retry-tracked",
+          identifier: "MT-RETRY-TRACKED",
+          attempt: 2,
+          due_in_ms: 1_000,
+          error: "checks still pending",
+          worker_host: nil,
+          workspace_path: nil
+        }
+      ],
+      tracked: [
+        %{
+          issue_id: "issue-retry-tracked",
+          issue_identifier: "MT-RETRY-TRACKED",
+          state: "In Review",
+          labels: ["symphony"],
+          phase: "waiting_for_checks",
+          phase_source: "workpad",
+          passive_phase: true,
+          rollout_mode: "observe",
+          dispatch_allowed: false,
+          waiting_reason: "checks_pending",
+          next_intended_action: "poll_on_next_cycle",
+          observed_at: DateTime.utc_now(),
+          ownership: %{allowed: true, label_present: true, workpad_present: true},
+          kill_switch: %{active: false, label_active: false, file_active: false},
+          workpad: %{marker_found: true, metadata_status: "ok"}
+        }
+      ],
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      rate_limits: nil
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :RetryTrackedObservabilityOrchestrator)
+    {:ok, _pid} = start_supervised({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+    start_test_endpoint(orchestrator: orchestrator_name)
+
+    conn = get(build_conn(), "/api/v1/MT-RETRY-TRACKED")
+    issue_payload = json_response(conn, 200)
+    assert issue_payload["status"] == "retrying"
+    assert issue_payload["retry"]["attempt"] == 2
+    assert issue_payload["tracked"]["phase"] == "waiting_for_checks"
   end
 
   test "phoenix observability api exposes worker session and proof artifacts" do
@@ -788,7 +887,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
-    assert response.body["counts"] == %{"running" => 1, "retrying" => 1}
+    assert response.body["counts"] == %{"running" => 1, "retrying" => 1, "tracked" => 0}
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200

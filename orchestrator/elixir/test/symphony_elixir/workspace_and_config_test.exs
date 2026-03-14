@@ -447,6 +447,75 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert_receive {:fetch_issue_states_page, ^query, %{ids: ^second_batch_ids, first: 5, relationFirst: 50}}
   end
 
+  test "linear client paginates issue comments beyond the initial workpad window" do
+    first_page_comments =
+      Enum.map(1..20, fn index ->
+        %{
+          "id" => "comment-#{index}",
+          "body" => "Comment #{index}",
+          "updatedAt" => "2026-03-01T12:00:#{String.pad_leading(Integer.to_string(rem(index, 60)), 2, "0")}Z"
+        }
+      end)
+
+    graphql_fun = fn query, variables ->
+      cond do
+        String.contains?(query, "SymphonyLinearIssuesById") ->
+          send(self(), {:issue_state_page, variables})
+
+          {:ok,
+           %{
+             "data" => %{
+               "issues" => %{
+                 "nodes" => [
+                   %{
+                     "id" => "issue-1",
+                     "identifier" => "MT-900",
+                     "title" => "Hydrate workpad comments",
+                     "description" => "Load all comments",
+                     "state" => %{"name" => "In Review"},
+                     "labels" => %{"nodes" => []},
+                     "comments" => %{
+                       "nodes" => first_page_comments,
+                       "pageInfo" => %{"hasNextPage" => true, "endCursor" => "comments-page-2"}
+                     },
+                     "inverseRelations" => %{"nodes" => []}
+                   }
+                 ]
+               }
+             }
+           }}
+
+        String.contains?(query, "SymphonyLinearIssueComments") ->
+          send(self(), {:issue_comments_page, variables})
+
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "comments" => %{
+                   "nodes" => [
+                     %{
+                       "id" => "comment-workpad",
+                       "body" => "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n```",
+                       "updatedAt" => "2026-03-02T12:00:00Z"
+                     }
+                   ],
+                   "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+                 }
+               }
+             }
+           }}
+      end
+    end
+
+    assert {:ok, [issue]} = Client.fetch_issue_states_by_ids_for_test(["issue-1"], graphql_fun)
+
+    assert_receive {:issue_state_page, %{ids: ["issue-1"], first: 1, relationFirst: 50}}
+    assert_receive {:issue_comments_page, %{id: "issue-1", first: 20, after: "comments-page-2"}}
+    assert length(issue.comments) == 21
+    assert Enum.at(issue.comments, -1).id == "comment-workpad"
+  end
+
   test "linear client logs response bodies for non-200 graphql responses" do
     log =
       ExUnit.CaptureLog.capture_log(fn ->
@@ -551,6 +620,28 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       title: "Owned elsewhere",
       state: "Todo",
       assigned_to_worker: false
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "issue without required orchestration ownership label is not dispatch-eligible" do
+    write_workflow_file!(Workflow.workflow_file_path(), orchestration_required_label: "symphony")
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "ownership-away-1",
+      identifier: "MT-1008",
+      title: "Owned elsewhere",
+      state: "Todo",
+      labels: ["backend"]
     }
 
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
@@ -1342,6 +1433,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.pi.thinking_level == nil
     assert config.pi.disable_extensions == true
     assert config.pi.disable_themes == true
+    assert config.orchestration.phase_store == "workpad"
+    assert config.orchestration.default_phase == "implementing"
+    assert config.orchestration.passive_phases == ["waiting_for_checks", "waiting_for_human", "blocked"]
+    assert config.orchestration.max_rework_cycles == 3
+    assert config.rollout.mode == "mutate"
+    assert config.rollout.preflight_required == false
+    assert config.pr.base_branch == "main"
+    assert config.pr.review_comment_mode == "off"
+    assert config.review.enabled == false
+    assert config.review.max_passes == 1
+    assert config.merge.mode == "disabled"
+    assert config.merge.method == "squash"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       worker_runtime: "pi",
@@ -1366,6 +1469,91 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.settings!().pi.model.provider == "openai"
     assert Config.settings!().pi.model.model_id == "gpt-5.4"
     assert Config.settings!().pi.thinking_level == "xhigh"
+  end
+
+  test "config validates orchestration policy sections" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      orchestration_default_phase: "reviewing",
+      orchestration_passive_phases: ["waiting_for_checks", "blocked"],
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      rollout_mode: "observe",
+      rollout_preflight_required: true,
+      rollout_kill_switch_label: "no-symphony-automation",
+      rollout_kill_switch_file: "tmp/symphony.pause",
+      pr_base_branch: "main",
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2,
+      review_fix_consideration_severities: ["P0", "P1", "P2"],
+      merge_mode: "auto",
+      merge_executor: "land_skill",
+      merge_approval_states: ["Merging"]
+    )
+
+    assert :ok = Config.validate!()
+    settings = Config.settings!()
+    expected_kill_switch_file = Workflow.workflow_file_path() |> Path.dirname() |> Path.join("tmp/symphony.pause") |> Path.expand()
+
+    assert settings.orchestration.default_phase == "reviewing"
+    assert settings.orchestration.passive_phases == ["waiting_for_checks", "blocked"]
+    assert settings.orchestration.ownership.required_label == "symphony"
+    assert settings.rollout.mode == "observe"
+    assert settings.rollout.kill_switch_file == expected_kill_switch_file
+    assert settings.pr.review_comment_mode == "upsert"
+    assert settings.review.agent == "pr-reviewer"
+    assert settings.review.output_format == "structured_markdown_v1"
+    assert settings.merge.executor == "land_skill"
+    assert settings.merge.approval_states == ["Merging"]
+  end
+
+  test "config rejects invalid policy combinations and unknown policy keys" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      review_enabled: true,
+      review_agent: nil,
+      review_output_format: nil
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "review.agent"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "freeform"
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "review.output_format"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      orchestration_passive_phases: ["waiting_for_checks"]
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "passive_phases"
+    assert message =~ "blocked"
+
+    workflow = """
+    ---
+    tracker:
+      kind: memory
+      project_slug: \"project\"
+    orchestration:
+      typo: true
+    ---
+    Prompt body
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
+    assert message =~ "orchestration has unknown keys"
   end
 
   test "config rejects remote ssh hosts when the Pi runtime is selected" do
