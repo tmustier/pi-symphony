@@ -591,6 +591,161 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
+  test "bootstrap lifecycle keeps unknown passive PR gates in waiting_for_checks" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "observe",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      merge_mode: "auto",
+      merge_approval_states: ["Merging"],
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1"
+    )
+
+    issue = %Issue{
+      id: "issue-passive-pr-unknown",
+      identifier: "MT-704QA",
+      state: "Merging",
+      title: "Wait for unknown PR readiness",
+      description: "Unknown mergeability or check state must not promote the PR",
+      url: "https://example.org/issues/MT-704QA",
+      branch_name: "feature/passive-pr-unknown",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_human\n  branch: feature/passive-pr-unknown\n  pr:\n    number: 102\n    url: https://github.com/acme/widgets/pull/102\n    head_sha: unknown123\n  review:\n    passes_completed: 1\n    last_reviewed_head_sha: unknown123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 102,
+           "url" => "https://github.com/acme/widgets/pull/102",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/passive-pr-unknown",
+           "headRefOid" => "unknown123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "UNKNOWN",
+           "mergeable" => "UNKNOWN",
+           "reviewDecision" => "APPROVED",
+           "statusCheckRollup" => nil
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      gates = runtime.workpad.metadata["observation"]["gates"]
+
+      assert runtime.phase == "waiting_for_checks"
+      assert runtime.waiting_reason == "checks_pending"
+      assert runtime.next_intended_action == "poll_on_next_cycle"
+      assert gates["checks"] == "unknown"
+      assert gates["mergeability"] == "unknown"
+      assert gates["human_approval"] == "approved"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "workpad sync refreshes core observation gates over stale persisted values" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    issue = %Issue{
+      id: "issue-workpad-gates-refresh",
+      identifier: "MT-704QB",
+      state: "In Progress",
+      title: "Refresh core observation gates",
+      description: "Fresh ownership and dispatch gates should win over stale persisted values",
+      url: "https://example.org/issues/MT-704QB",
+      branch_name: "feature/workpad-gates-refresh",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: implementing\n  observation:\n    gates:\n      ownership: fail\n      kill_switch: active\n      dispatch: blocked\n      pr: stale\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      assert {:ok, updated_issue} =
+               Workpad.sync_for_test(
+                 issue,
+                 %{observation_gates: %{"pr" => "open"}},
+                 tracker_module: Memory
+               )
+
+      gates =
+        updated_issue
+        |> SymphonyElixir.OrchestrationPolicy.issue_runtime(Config.settings!())
+        |> then(& &1.workpad.metadata["observation"]["gates"])
+
+      assert gates["ownership"] == "pass"
+      assert gates["kill_switch"] == "pass"
+      assert gates["dispatch"] == "pass"
+      assert gates["pr"] == "open"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "post-run lifecycle persists review comment metadata from workspace artifacts" do
     test_root = Path.join(System.tmp_dir!(), "symphony-review-persistence-#{System.unique_integer([:positive])}")
     origin_repo = Path.join(test_root, "origin.git")

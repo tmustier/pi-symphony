@@ -562,7 +562,7 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp normalize_status_check_rollup(_status_check_rollup) do
-    %{total: 0, passing: 0, pending: 0, failing: 0, state: "pass"}
+    %{total: 0, passing: 0, pending: 0, failing: 0, state: "unknown"}
   end
 
   defp classify_status_check(%{} = item) do

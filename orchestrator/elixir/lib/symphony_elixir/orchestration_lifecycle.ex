@@ -404,7 +404,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_phase_after_observation(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> runtime.phase
-      mergeability_gate(pr_state) == "blocked" -> "waiting_for_checks"
+      mergeability_ready?(pr_state) != true -> "waiting_for_checks"
       checks_ready?(pr_state, settings) != true -> "waiting_for_checks"
       review_ready?(review_status, settings) != true -> "waiting_for_checks"
       human_approval_ready?(issue, settings) != true -> "waiting_for_human"
@@ -413,11 +413,20 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp passive_waiting_reason(issue, runtime, pr_state, review_status, settings) do
+    waiting_hint = waiting_reason_hint(runtime)
+
     cond do
       passive_pr_gate(pr_state) != "open" -> runtime.waiting_reason
       mergeability_gate(pr_state) == "blocked" -> "mergeability_changed"
+      true -> passive_readiness_waiting_reason(issue, pr_state, review_status, settings, waiting_hint)
+    end
+  end
+
+  defp passive_readiness_waiting_reason(issue, pr_state, review_status, settings, waiting_hint) do
+    cond do
+      mergeability_ready?(pr_state) != true -> waiting_hint || "checks_pending"
       checks_ready?(pr_state, settings) != true -> "checks_pending"
-      review_ready?(review_status, settings) != true -> runtime.waiting_reason || "checks_pending"
+      review_ready?(review_status, settings) != true -> waiting_hint || "checks_pending"
       human_approval_ready?(issue, settings) != true -> "human_approval_required"
       true -> nil
     end
@@ -427,6 +436,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     cond do
       passive_pr_gate(pr_state) != "open" -> runtime.next_intended_action
       mergeability_gate(pr_state) == "blocked" -> "repair_mergeability"
+      mergeability_ready?(pr_state) != true -> "poll_on_next_cycle"
       true -> passive_readiness_next_action(issue, runtime, pr_state, review_status, settings)
     end
   end
@@ -484,6 +494,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
+  defp mergeability_ready?(pr_state), do: mergeability_gate(pr_state) == "pass"
+
   defp head_match_gate(runtime, %{head_sha: current_head_sha}) do
     persisted_head_sha =
       runtime
@@ -501,6 +513,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp checks_ready?(pr_state, settings) do
     settings.merge.require_green_checks != true or checks_gate(pr_state) == "pass"
   end
+
+  defp waiting_reason_hint(%{waiting_reason: "observe_only"}), do: nil
+  defp waiting_reason_hint(%{waiting_reason: waiting_reason}), do: waiting_reason
 
   defp review_ready?(_review_status, settings) when settings.review.enabled != true, do: true
   defp review_ready?(review_status, _settings), do: review_status in ["current", "persisted"]

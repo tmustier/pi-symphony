@@ -231,8 +231,8 @@ defmodule SymphonyElixir.Workpad do
       "dispatch" => if(runtime.dispatch_allowed, do: "pass", else: "blocked")
     }
 
-    default_gates
-    |> Map.merge(existing)
+    existing
+    |> Map.merge(default_gates)
     |> Map.merge(current)
   end
 
