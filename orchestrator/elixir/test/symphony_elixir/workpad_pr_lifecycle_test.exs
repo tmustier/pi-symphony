@@ -2026,6 +2026,120 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
+  test "post-run lifecycle can complete a merge from persisted PR metadata after PR lookup fails" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      review_enabled: false,
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_approval_states: ["Merging"]
+    )
+
+    issue = %Issue{
+      id: "issue-merge-from-persisted-pr",
+      identifier: "MT-704MF",
+      state: "Merging",
+      title: "Merge from persisted PR context",
+      description: "A transient `gh pr list` failure should not block a confirmed merge",
+      url: "https://example.org/issues/MT-704MF",
+      branch_name: "feature/merge-from-persisted-pr",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: merging\n  branch: feature/merge-from-persisted-pr\n  pr:\n    number: 110\n    url: https://github.com/acme/widgets/pull/110\n    head_sha: abc123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:error, {1, "list failed"}},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 110,
+           "url" => "https://github.com/acme/widgets/pull/110",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-from-persisted-pr",
+           "headRefOid" => "abc123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "CLEAN",
+           "mergeable" => "MERGEABLE",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => nil
+         })},
+        {:ok, "merged"},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 110,
+           "url" => "https://github.com/acme/widgets/pull/110",
+           "state" => "MERGED",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-from-persisted-pr",
+           "headRefOid" => "abc123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "UNKNOWN",
+           "mergeable" => "UNKNOWN",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => %{"oid" => "merge793"}
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-merge-from-persisted-pr"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-merge-from-persisted-pr",
+                 %{workspace_path: nil, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      assert updated_issue.state == "Done"
+      assert runtime.phase == "merging"
+      assert runtime.workpad.metadata["merge"]["last_merge_commit_sha"] == "merge793"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "post-run lifecycle preserves persisted PR metadata when merge lookup fails" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)

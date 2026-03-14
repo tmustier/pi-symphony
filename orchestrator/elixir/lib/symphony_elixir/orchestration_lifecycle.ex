@@ -141,7 +141,10 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       |> maybe_put_merge_update(merge_update(current_pr_metadata, merge_result, now))
 
     cond do
-      match?({:error, _reason}, pr_result) and settings.pr.auto_create == true and settings.rollout.mode in ["mutate", "merge"] ->
+      match?({:error, _reason}, pr_result) and
+        settings.pr.auto_create == true and
+        settings.rollout.mode in ["mutate", "merge"] and
+          not merge_phase?(runtime.phase) ->
         Map.merge(base_updates, %{phase: "blocked", waiting_reason: "tool_unavailable", next_intended_action: "restore_pr_tooling"})
 
       review_persistence_blocked?(review_result) ->
@@ -688,7 +691,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp done_tracker_state(settings) do
     terminal_states = Enum.filter(settings.tracker.terminal_states, &is_binary/1)
-    find_preferred_terminal_state(terminal_states, ["done", "completed", "closed"])
+
+    find_preferred_terminal_state(terminal_states, ["done", "completed", "closed"]) ||
+      List.first(terminal_states)
   end
 
   defp find_preferred_terminal_state(terminal_states, preferred_states) do
