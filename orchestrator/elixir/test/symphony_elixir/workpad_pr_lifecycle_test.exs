@@ -784,6 +784,99 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
+  test "bootstrap lifecycle blocks passive readiness when the PR is no longer open" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "observe",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      merge_mode: "auto",
+      merge_approval_states: ["Merging"],
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1"
+    )
+
+    issue = %Issue{
+      id: "issue-passive-pr-merged",
+      identifier: "MT-704QC",
+      state: "In Review",
+      title: "Stop passive readiness on merged PRs",
+      description: "A non-open PR should not stay in waiting_for_checks",
+      url: "https://example.org/issues/MT-704QC",
+      branch_name: "feature/passive-pr-merged",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/passive-pr-merged\n  pr:\n    url: https://github.com/acme/widgets/pull/103\n    head_sha: merged123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 103,
+           "url" => "https://github.com/acme/widgets/pull/103",
+           "state" => "MERGED",
+           "isDraft" => false,
+           "headRefName" => "feature/passive-pr-merged",
+           "headRefOid" => "merged123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "UNKNOWN",
+           "mergeable" => "UNKNOWN",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => nil
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      gates = runtime.workpad.metadata["observation"]["gates"]
+
+      assert runtime.phase == "blocked"
+      assert runtime.waiting_reason == "missing_context"
+      assert runtime.next_intended_action == "reconcile_merged_pr"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "reconcile_merged_pr"
+      assert gates["pr"] == "merged"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "workpad sync refreshes core observation gates over stale persisted values" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)

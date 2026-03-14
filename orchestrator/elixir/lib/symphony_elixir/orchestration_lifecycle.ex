@@ -403,7 +403,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp passive_phase_after_observation(issue, runtime, pr_state, review_status, settings) do
     cond do
-      passive_pr_gate(pr_state) != "open" -> runtime.phase
+      passive_pr_gate(pr_state) != "open" -> "blocked"
       mergeability_ready?(pr_state) != true -> "waiting_for_checks"
       checks_ready?(pr_state, settings) != true -> "waiting_for_checks"
       review_ready?(review_status, settings) != true -> "waiting_for_checks"
@@ -413,9 +413,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
-  defp passive_waiting_reason(issue, runtime, pr_state, review_status, settings) do
+  defp passive_waiting_reason(issue, _runtime, pr_state, review_status, settings) do
     cond do
-      passive_pr_gate(pr_state) != "open" -> runtime.waiting_reason
+      passive_pr_gate(pr_state) != "open" -> "missing_context"
       mergeability_gate(pr_state) == "blocked" -> "mergeability_changed"
       true -> passive_readiness_waiting_reason(issue, pr_state, review_status, settings)
     end
@@ -433,7 +433,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp passive_next_action(issue, runtime, pr_state, review_status, settings) do
     cond do
-      passive_pr_gate(pr_state) != "open" -> runtime.next_intended_action
+      passive_pr_gate(pr_state) != "open" -> non_open_pr_next_action(pr_state)
       mergeability_gate(pr_state) == "blocked" -> "repair_mergeability"
       mergeability_ready?(pr_state) != true -> "poll_on_next_cycle"
       true -> passive_readiness_next_action(issue, runtime, pr_state, review_status, settings)
@@ -458,6 +458,15 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       state == "CLOSED" -> "closed"
       draft? == true -> "draft"
       true -> "open"
+    end
+  end
+
+  defp non_open_pr_next_action(pr_state) do
+    case passive_pr_gate(pr_state) do
+      "merged" -> "reconcile_merged_pr"
+      "closed" -> "reconcile_closed_pr"
+      "draft" -> "resolve_pr_draft_state"
+      _ -> "poll_on_next_cycle"
     end
   end
 
