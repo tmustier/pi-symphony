@@ -242,7 +242,11 @@ symphony:
     last_reviewed_head_sha: abcdef1
     last_fixed_head_sha: abcdef1
   merge:
+    last_attempted_at: null
     last_attempted_head_sha: null
+    last_merge_commit_sha: null
+    last_merged_head_sha: null
+    last_failure_reason: null
   waiting:
     reason: checks_pending
     since: 2026-03-14T00:00:00Z

@@ -3,6 +3,19 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
 
   alias SymphonyElixir.Tracker.Memory
 
+  defmodule FailingStateTracker do
+    @behaviour SymphonyElixir.Tracker
+
+    alias SymphonyElixir.Tracker.Memory, as: MemoryTracker
+
+    def fetch_candidate_issues, do: MemoryTracker.fetch_candidate_issues()
+    def fetch_issues_by_states(states), do: MemoryTracker.fetch_issues_by_states(states)
+    def fetch_issue_states_by_ids(issue_ids), do: MemoryTracker.fetch_issue_states_by_ids(issue_ids)
+    def create_comment(issue_id, body), do: MemoryTracker.create_comment(issue_id, body)
+    def update_comment(comment_id, body), do: MemoryTracker.update_comment(comment_id, body)
+    def update_issue_state(_issue_id, _state_name), do: {:error, :tracker_write_failed}
+  end
+
   test "workspace git inspects local branch, head sha, and remote publication state" do
     test_root = Path.join(System.tmp_dir!(), "symphony-workspace-git-#{System.unique_integer([:positive])}")
     origin_repo = Path.join(test_root, "origin.git")
@@ -265,6 +278,127 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     assert result.checks.passing == 1
     assert result.checks.pending == 1
     assert_receive {:github_command, "gh", ["pr", "view", "77", "--repo", "acme/widgets" | _]}
+  end
+
+  test "pull requests merge only when the expected head still matches" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_require_green_checks: true,
+      merge_require_head_match: true
+    )
+
+    Process.put(:github_runner_results, [
+      {:ok,
+       Jason.encode!(%{
+         "number" => 77,
+         "url" => "https://github.com/acme/widgets/pull/77",
+         "state" => "OPEN",
+         "isDraft" => false,
+         "headRefName" => "feature/merge-pr",
+         "headRefOid" => "abc123",
+         "baseRefName" => "main",
+         "mergeStateStatus" => "CLEAN",
+         "mergeable" => "MERGEABLE",
+         "reviewDecision" => "APPROVED",
+         "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+         "mergeCommit" => nil
+       })},
+      {:ok, "merged"},
+      {:ok,
+       Jason.encode!(%{
+         "number" => 77,
+         "url" => "https://github.com/acme/widgets/pull/77",
+         "state" => "MERGED",
+         "isDraft" => false,
+         "headRefName" => "feature/merge-pr",
+         "headRefOid" => "abc123",
+         "baseRefName" => "main",
+         "mergeStateStatus" => "UNKNOWN",
+         "mergeable" => "UNKNOWN",
+         "reviewDecision" => "APPROVED",
+         "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+         "mergeCommit" => %{"oid" => "merge789"}
+       })}
+    ])
+
+    runner = fn command, args, _opts ->
+      send(self(), {:github_command, command, args})
+
+      case Process.get(:github_runner_results) do
+        [result | rest] ->
+          Process.put(:github_runner_results, rest)
+          result
+
+        _ ->
+          {:error, :no_github_result}
+      end
+    end
+
+    assert {:ok, result} =
+             PullRequests.merge_if_head_matches_for_test(
+               %{number: 77, repo_slug: "acme/widgets", expected_head_sha: "abc123"},
+               runner: runner
+             )
+
+    assert result.state == "MERGED"
+    assert result.merge_commit_sha == "merge789"
+    assert_receive {:github_command, "gh", ["pr", "view", "77", "--repo", "acme/widgets" | _]}
+    assert_receive {:github_command, "gh", ["pr", "merge", "77", "--repo", "acme/widgets", "--squash", "--match-head-commit", "abc123"]}
+  end
+
+  test "pull requests skip merge when the live head no longer matches" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_require_green_checks: true,
+      merge_require_head_match: true
+    )
+
+    Process.put(:github_runner_results, [
+      {:ok,
+       Jason.encode!(%{
+         "number" => 77,
+         "url" => "https://github.com/acme/widgets/pull/77",
+         "state" => "OPEN",
+         "isDraft" => false,
+         "headRefName" => "feature/merge-pr",
+         "headRefOid" => "new456",
+         "baseRefName" => "main",
+         "mergeStateStatus" => "CLEAN",
+         "mergeable" => "MERGEABLE",
+         "reviewDecision" => "APPROVED",
+         "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+         "mergeCommit" => nil
+       })}
+    ])
+
+    runner = fn command, args, _opts ->
+      send(self(), {:github_command, command, args})
+
+      case Process.get(:github_runner_results) do
+        [result | rest] ->
+          Process.put(:github_runner_results, rest)
+          result
+
+        _ ->
+          {:error, :no_github_result}
+      end
+    end
+
+    assert {:skip, details} =
+             PullRequests.merge_if_head_matches_for_test(
+               %{number: 77, repo_slug: "acme/widgets", expected_head_sha: "abc123"},
+               runner: runner
+             )
+
+    assert details.reason == :head_mismatch
+    assert details.next_intended_action == "rerun_review_for_current_head"
+    refute_receive {:github_command, "gh", ["pr", "merge" | _]}
   end
 
   test "review artifact loads the canonical workspace review file" do
@@ -1487,6 +1621,454 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert runtime.workpad.metadata["observation"]["next_intended_action"] == "repair_review_comment_persistence"
       assert runtime.workpad.metadata["review"]["passes_completed"] == 0
       assert runtime.workpad.metadata["observation"]["gates"]["review"] == "tool_unavailable"
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle merges a ready_to_merge PR and marks the tracker done after confirmation" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-merge-success-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_approval_states: ["Merging"]
+    )
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/merge-success", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# merge success\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/merge-success"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      trimmed_head_sha = String.trim(head_sha)
+
+      issue = %Issue{
+        id: "issue-merge-success",
+        identifier: "MT-704M",
+        state: "Merging",
+        title: "Merge the reviewed PR",
+        description: "Only mark Done after the merge is confirmed",
+        url: "https://example.org/issues/MT-704M",
+        branch_name: "feature/merge-success",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body:
+              "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: ready_to_merge\n  branch: feature/merge-success\n  pr:\n    number: 104\n    url: https://github.com/acme/widgets/pull/104\n    head_sha: #{trimmed_head_sha}\n  review:\n    passes_completed: 1\n    last_reviewed_head_sha: #{trimmed_head_sha}\n```",
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 104,
+             "url" => "https://github.com/acme/widgets/pull/104",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/merge-success",
+             "headRefOid" => trimmed_head_sha,
+             "baseRefName" => "main"
+           }
+         ])},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 104,
+           "url" => "https://github.com/acme/widgets/pull/104",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-success",
+           "headRefOid" => trimmed_head_sha,
+           "baseRefName" => "main",
+           "mergeStateStatus" => "CLEAN",
+           "mergeable" => "MERGEABLE",
+           "reviewDecision" => "APPROVED",
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => nil
+         })},
+        {:ok, "merged"},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 104,
+           "url" => "https://github.com/acme/widgets/pull/104",
+           "state" => "MERGED",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-success",
+           "headRefOid" => trimmed_head_sha,
+           "baseRefName" => "main",
+           "mergeStateStatus" => "UNKNOWN",
+           "mergeable" => "UNKNOWN",
+           "reviewDecision" => "APPROVED",
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => %{"oid" => "merge789"}
+         })}
+      ])
+
+      runner = fn command, args, _opts ->
+        send(self(), {:github_command, command, args})
+
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-merge-success"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-merge-success",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      merge_metadata = runtime.workpad.metadata["merge"]
+      gates = runtime.workpad.metadata["observation"]["gates"]
+
+      assert updated_issue.state == "Done"
+      assert runtime.phase == "merging"
+      assert runtime.next_intended_action == "reconcile_tracker_completion"
+      assert merge_metadata["last_attempted_at"] != nil
+      assert merge_metadata["last_attempted_head_sha"] == trimmed_head_sha
+      assert merge_metadata["last_merge_commit_sha"] == "merge789"
+      assert merge_metadata["last_merged_head_sha"] == trimmed_head_sha
+      assert merge_metadata["last_failure_reason"] == nil
+      assert gates["pr"] == "merged"
+      assert gates["review"] == "current"
+      assert_receive {:memory_tracker_state_update, "issue-merge-success", "Done"}
+      assert_receive {:github_command, "gh", ["pr", "merge", "104" | _]}
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle falls back to waiting_for_checks when the merge head is stale" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-merge-stale-head-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_approval_states: ["Merging"]
+    )
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/merge-stale-head", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# merge stale head\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/merge-stale-head"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      trimmed_head_sha = String.trim(head_sha)
+
+      issue = %Issue{
+        id: "issue-merge-stale-head",
+        identifier: "MT-704N",
+        state: "Merging",
+        title: "Refresh merge head before landing",
+        description: "A newer head should bounce the issue back to waiting_for_checks",
+        url: "https://example.org/issues/MT-704N",
+        branch_name: "feature/merge-stale-head",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body:
+              "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: ready_to_merge\n  branch: feature/merge-stale-head\n  pr:\n    number: 105\n    url: https://github.com/acme/widgets/pull/105\n    head_sha: stale123\n  review:\n    passes_completed: 1\n    last_reviewed_head_sha: stale123\n```",
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 105,
+             "url" => "https://github.com/acme/widgets/pull/105",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/merge-stale-head",
+             "headRefOid" => trimmed_head_sha,
+             "baseRefName" => "main"
+           }
+         ])},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 105,
+           "url" => "https://github.com/acme/widgets/pull/105",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-stale-head",
+           "headRefOid" => trimmed_head_sha,
+           "baseRefName" => "main",
+           "mergeStateStatus" => "CLEAN",
+           "mergeable" => "MERGEABLE",
+           "reviewDecision" => "APPROVED",
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => nil
+         })}
+      ])
+
+      runner = fn command, args, _opts ->
+        send(self(), {:github_command, command, args})
+
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-merge-stale-head"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-merge-stale-head",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      merge_metadata = runtime.workpad.metadata["merge"]
+      gates = runtime.workpad.metadata["observation"]["gates"]
+
+      assert updated_issue.state == "Merging"
+      assert runtime.phase == "waiting_for_checks"
+      assert runtime.waiting_reason == "checks_pending"
+      assert runtime.workpad.metadata["pr"]["head_sha"] == trimmed_head_sha
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "rerun_review_for_current_head"
+      assert merge_metadata["last_attempted_head_sha"] == "stale123"
+      assert merge_metadata["last_failure_reason"] == "head_mismatch"
+      assert gates["review"] == "stale"
+      refute_receive {:memory_tracker_state_update, "issue-merge-stale-head", _state}
+      refute_receive {:github_command, "gh", ["pr", "merge" | _]}
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle retries tracker reconciliation after a confirmed merge" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-merge-tracker-failure-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_approval_states: ["Merging"]
+    )
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/merge-tracker-failure", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# merge tracker failure\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/merge-tracker-failure"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      trimmed_head_sha = String.trim(head_sha)
+
+      issue = %Issue{
+        id: "issue-merge-tracker-failure",
+        identifier: "MT-704O",
+        state: "Merging",
+        title: "Retry tracker completion after merge",
+        description: "The workpad should remember the merged head even if tracker state update fails",
+        url: "https://example.org/issues/MT-704O",
+        branch_name: "feature/merge-tracker-failure",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body:
+              "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: ready_to_merge\n  branch: feature/merge-tracker-failure\n  pr:\n    number: 106\n    url: https://github.com/acme/widgets/pull/106\n    head_sha: #{trimmed_head_sha}\n  review:\n    passes_completed: 1\n    last_reviewed_head_sha: #{trimmed_head_sha}\n```",
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 106,
+             "url" => "https://github.com/acme/widgets/pull/106",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/merge-tracker-failure",
+             "headRefOid" => trimmed_head_sha,
+             "baseRefName" => "main"
+           }
+         ])},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 106,
+           "url" => "https://github.com/acme/widgets/pull/106",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-tracker-failure",
+           "headRefOid" => trimmed_head_sha,
+           "baseRefName" => "main",
+           "mergeStateStatus" => "CLEAN",
+           "mergeable" => "MERGEABLE",
+           "reviewDecision" => "APPROVED",
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => nil
+         })},
+        {:ok, "merged"},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 106,
+           "url" => "https://github.com/acme/widgets/pull/106",
+           "state" => "MERGED",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-tracker-failure",
+           "headRefOid" => trimmed_head_sha,
+           "baseRefName" => "main",
+           "mergeStateStatus" => "UNKNOWN",
+           "mergeable" => "UNKNOWN",
+           "reviewDecision" => "APPROVED",
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => %{"oid" => "merge790"}
+         })}
+      ])
+
+      runner = fn command, args, _opts ->
+        send(self(), {:github_command, command, args})
+
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-merge-tracker-failure"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-merge-tracker-failure",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: FailingStateTracker
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      merge_metadata = runtime.workpad.metadata["merge"]
+
+      assert updated_issue.state == "Merging"
+      assert runtime.phase == "merging"
+      assert runtime.next_intended_action == "reconcile_tracker_completion"
+      assert merge_metadata["last_merge_commit_sha"] == "merge790"
+      assert merge_metadata["last_failure_reason"] == nil
     after
       File.rm_rf(test_root)
 
