@@ -494,7 +494,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
-  test "bootstrap lifecycle promotes approval-state issues into ready_to_merge when passive gates are green" do
+  test "bootstrap lifecycle keeps green PRs passive in observe mode" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
 
@@ -571,8 +571,105 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
       gates = runtime.workpad.metadata["observation"]["gates"]
 
-      assert runtime.phase == "ready_to_merge"
+      assert runtime.phase == "waiting_for_human"
       assert runtime.waiting_reason == "observe_only"
+      assert runtime.next_intended_action == "merge_when_green"
+      assert runtime.workpad.metadata["waiting"]["reason"] == "observe_only"
+      assert runtime.passive_phase == true
+      assert SymphonyElixir.OrchestrationPolicy.continuation_allowed?(updated_issue, Config.settings!()) == false
+      assert gates["human_approval"] == "approved"
+      assert gates["checks"] == "pass"
+      assert gates["review"] == "current"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "bootstrap lifecycle promotes approval-state issues into ready_to_merge when passive gates are green" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      merge_mode: "auto",
+      merge_approval_states: ["Merging"],
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1"
+    )
+
+    issue = %Issue{
+      id: "issue-passive-pr-ready-mutate",
+      identifier: "MT-704Q1",
+      state: "Merging",
+      title: "Promote merge-ready issues",
+      description: "Allow passive polling to notice when merge gates are satisfied",
+      url: "https://example.org/issues/MT-704Q1",
+      branch_name: "feature/passive-pr-ready-mutate",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_human\n  branch: feature/passive-pr-ready-mutate\n  pr:\n    number: 101\n    url: https://github.com/acme/widgets/pull/101\n    head_sha: ready123\n  review:\n    passes_completed: 1\n    last_reviewed_head_sha: ready123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 101,
+           "url" => "https://github.com/acme/widgets/pull/101",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/passive-pr-ready-mutate",
+           "headRefOid" => "ready123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "BEHIND",
+           "mergeable" => "MERGEABLE",
+           "reviewDecision" => "APPROVED",
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}]
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      gates = runtime.workpad.metadata["observation"]["gates"]
+
+      assert runtime.phase == "ready_to_merge"
+      assert runtime.waiting_reason == nil
       assert runtime.next_intended_action == "merge_when_green"
       assert runtime.workpad.metadata["waiting"]["reason"] == nil
       assert runtime.passive_phase == false
@@ -580,6 +677,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert gates["human_approval"] == "approved"
       assert gates["checks"] == "pass"
       assert gates["review"] == "current"
+      assert gates["mergeability"] == "pass"
     after
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),

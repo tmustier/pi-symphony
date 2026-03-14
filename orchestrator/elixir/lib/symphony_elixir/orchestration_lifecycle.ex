@@ -408,7 +408,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       checks_ready?(pr_state, settings) != true -> "waiting_for_checks"
       review_ready?(review_status, settings) != true -> "waiting_for_checks"
       human_approval_ready?(issue, settings) != true -> "waiting_for_human"
-      true -> "ready_to_merge"
+      ready_to_merge_promotion_allowed?(settings) -> "ready_to_merge"
+      true -> runtime.phase
     end
   end
 
@@ -487,7 +488,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       state in ["MERGED", "CLOSED"] -> "blocked"
       draft? == true -> "blocked"
       mergeable == "CONFLICTING" -> "blocked"
-      merge_state_status in ["DIRTY", "BLOCKED", "DRAFT", "BEHIND"] -> "blocked"
+      merge_state_status in ["DIRTY", "BLOCKED", "DRAFT"] -> "blocked"
       mergeable == "MERGEABLE" -> "pass"
       merge_state_status in ["CLEAN", "UNSTABLE", "HAS_HOOKS"] -> "pass"
       true -> "unknown"
@@ -495,6 +496,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp mergeability_ready?(pr_state), do: mergeability_gate(pr_state) == "pass"
+
+  defp ready_to_merge_promotion_allowed?(settings), do: settings.rollout.mode in ["mutate", "merge"]
 
   defp head_match_gate(runtime, %{head_sha: current_head_sha}) do
     persisted_head_sha =
