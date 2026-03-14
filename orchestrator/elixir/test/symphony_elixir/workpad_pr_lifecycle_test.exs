@@ -401,6 +401,71 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     refute_receive {:github_command, "gh", ["pr", "merge" | _]}
   end
 
+  test "pull requests treat asynchronous merge confirmation as pending instead of failed" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_require_green_checks: true,
+      merge_require_head_match: true
+    )
+
+    Process.put(:github_runner_results, [
+      {:ok,
+       Jason.encode!(%{
+         "number" => 77,
+         "url" => "https://github.com/acme/widgets/pull/77",
+         "state" => "OPEN",
+         "isDraft" => false,
+         "headRefName" => "feature/merge-pr",
+         "headRefOid" => "abc123",
+         "baseRefName" => "main",
+         "mergeStateStatus" => "CLEAN",
+         "mergeable" => "MERGEABLE",
+         "reviewDecision" => "APPROVED",
+         "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+         "mergeCommit" => nil
+       })},
+      {:ok, "queued"},
+      {:ok,
+       Jason.encode!(%{
+         "number" => 77,
+         "url" => "https://github.com/acme/widgets/pull/77",
+         "state" => "OPEN",
+         "isDraft" => false,
+         "headRefName" => "feature/merge-pr",
+         "headRefOid" => "abc123",
+         "baseRefName" => "main",
+         "mergeStateStatus" => "CLEAN",
+         "mergeable" => "MERGEABLE",
+         "reviewDecision" => "APPROVED",
+         "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+         "mergeCommit" => nil
+       })}
+    ])
+
+    runner = fn _command, _args, _opts ->
+      case Process.get(:github_runner_results) do
+        [result | rest] ->
+          Process.put(:github_runner_results, rest)
+          result
+
+        _ ->
+          {:error, :no_github_result}
+      end
+    end
+
+    assert {:skip, details} =
+             PullRequests.merge_if_head_matches_for_test(
+               %{number: 77, repo_slug: "acme/widgets", expected_head_sha: "abc123"},
+               runner: runner
+             )
+
+    assert details.reason == :merge_pending_confirmation
+    assert details.next_intended_action == "confirm_merge_completion"
+  end
+
   test "review artifact loads the canonical workspace review file" do
     workspace = Path.join(System.tmp_dir!(), "symphony-review-artifact-#{System.unique_integer([:positive])}")
     artifact_path = ReviewArtifact.path_for_test(workspace)
@@ -2213,6 +2278,118 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert runtime.workpad.metadata["pr"]["number"] == 109
       assert runtime.workpad.metadata["pr"]["url"] == "https://github.com/acme/widgets/pull/109"
       assert runtime.workpad.metadata["pr"]["head_sha"] == "abc123"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle blocks open merges when the reviewed head is missing" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "merge",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      merge_mode: "auto",
+      merge_method: "squash",
+      merge_approval_states: ["Merging"]
+    )
+
+    issue = %Issue{
+      id: "issue-merge-review-head-missing",
+      identifier: "MT-704MG",
+      state: "Merging",
+      title: "Require reviewed head before merge",
+      description: "Open PR merges should stop when review metadata is incomplete",
+      url: "https://example.org/issues/MT-704MG",
+      branch_name: "feature/merge-review-head-missing",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: ready_to_merge\n  branch: feature/merge-review-head-missing\n  pr:\n    number: 111\n    url: https://github.com/acme/widgets/pull/111\n    head_sha: abc123\n  review:\n    passes_completed: 1\n    last_reviewed_head_sha: null\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 111,
+             "url" => "https://github.com/acme/widgets/pull/111",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/merge-review-head-missing",
+             "headRefOid" => "abc123",
+             "baseRefName" => "main"
+           }
+         ])},
+        {:ok,
+         Jason.encode!(%{
+           "number" => 111,
+           "url" => "https://github.com/acme/widgets/pull/111",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/merge-review-head-missing",
+           "headRefOid" => "abc123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "CLEAN",
+           "mergeable" => "MERGEABLE",
+           "reviewDecision" => "APPROVED",
+           "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+           "mergeCommit" => nil
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-merge-review-head-missing"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-merge-review-head-missing",
+                 %{workspace_path: nil, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      assert updated_issue.state == "Merging"
+      assert runtime.phase == "blocked"
+      assert runtime.waiting_reason == "missing_context"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "record_expected_merge_head"
     after
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),

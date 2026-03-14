@@ -159,16 +159,13 @@ defmodule SymphonyElixir.PullRequests do
     end
   end
 
-  defp merge_context_skip(context, settings) do
+  defp merge_context_skip(context, _settings) do
     cond do
       is_nil(context.repo_slug) ->
         %{reason: :missing_repo_slug, next_intended_action: "record_repo_context"}
 
       is_nil(context.pr_number) ->
         %{reason: :missing_pr_number, next_intended_action: "record_pr_context"}
-
-      settings.merge.require_head_match == true and is_nil(context.expected_head_sha) ->
-        %{reason: :missing_expected_head_sha, next_intended_action: "record_expected_merge_head"}
 
       true ->
         nil
@@ -179,13 +176,15 @@ defmodule SymphonyElixir.PullRequests do
     with {:ok, pr_state} <- inspect_pull_request_state(context, runner),
          :ok <- validate_merge_preconditions(pr_state, context, settings),
          :ok <- run_pull_request_merge(context, runner),
-         {:ok, merged_state} <- inspect_pull_request_state(context, runner),
-         :ok <- confirm_merged_state(merged_state) do
-      {:ok, merge_success(merged_state, context)}
+         {:ok, merged_state} <- inspect_pull_request_state(context, runner) do
+      case confirm_merged_state(merged_state, context) do
+        :ok -> {:ok, merge_success(merged_state, context)}
+        {:skip, _details} = result -> result
+        :merge_not_confirmed -> {:error, :merge_not_confirmed}
+      end
     else
       {:skip, _details} = result -> result
       {:error, _reason} = result -> result
-      :merge_not_confirmed -> {:error, :merge_not_confirmed}
     end
   end
 
@@ -229,13 +228,28 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp head_match_skip(pr_state, context, settings) do
-    if settings.merge.require_head_match == true and pr_state.head_sha != context.expected_head_sha do
-      {:skip, merge_skip(:head_mismatch, context, "rerun_review_for_current_head", pr_state)}
+    cond do
+      settings.merge.require_head_match != true ->
+        nil
+
+      is_nil(context.expected_head_sha) ->
+        {:skip, merge_skip(:missing_expected_head_sha, context, "record_expected_merge_head", pr_state)}
+
+      pr_state.head_sha != context.expected_head_sha ->
+        {:skip, merge_skip(:head_mismatch, context, "rerun_review_for_current_head", pr_state)}
+
+      true ->
+        nil
     end
   end
 
-  defp confirm_merged_state(%{state: "MERGED"}), do: :ok
-  defp confirm_merged_state(_pr_state), do: :merge_not_confirmed
+  defp confirm_merged_state(%{state: "MERGED"}, _context), do: :ok
+
+  defp confirm_merged_state(%{state: "OPEN"} = pr_state, context) do
+    {:skip, merge_skip(:merge_pending_confirmation, context, "confirm_merge_completion", pr_state)}
+  end
+
+  defp confirm_merged_state(_pr_state, _context), do: :merge_not_confirmed
 
   defp merge_skip(reason, context, next_intended_action, pr_state) do
     %{

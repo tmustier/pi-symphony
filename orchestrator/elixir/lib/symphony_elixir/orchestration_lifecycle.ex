@@ -494,7 +494,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     pr_head_sha = pick_string([Map.get(pr_info, :head_sha), Map.get(pr_metadata, "head_sha")])
 
     if settings.review.enabled == true do
-      pick_string([Map.get(review_metadata, "last_reviewed_head_sha"), pr_head_sha])
+      pick_string([Map.get(review_metadata, "last_reviewed_head_sha")])
     else
       pr_head_sha
     end
@@ -542,6 +542,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       merge_successful?(merge_result) or merge_already_completed?(merge_result) ->
         "merging"
 
+      reason == :merge_pending_confirmation ->
+        "merging"
+
       reason == :human_approval_required ->
         "waiting_for_human"
 
@@ -566,6 +569,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
     cond do
       merge_successful?(merge_result) or merge_already_completed?(merge_result) ->
+        nil
+
+      reason == :merge_pending_confirmation ->
         nil
 
       reason == :human_approval_required ->
@@ -615,6 +621,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
           last_attempted_head_sha: attempted_head_sha,
           last_merge_commit_sha: merge_commit_sha(merge_result),
           last_merged_head_sha: merge_live_head_sha(merge_result),
+          last_failure_reason: nil
+        }
+
+      merge_skip_reason(merge_result) == :merge_pending_confirmation ->
+        %{
+          last_attempted_at: timestamp,
+          last_attempted_head_sha: attempted_head_sha,
           last_failure_reason: nil
         }
 
