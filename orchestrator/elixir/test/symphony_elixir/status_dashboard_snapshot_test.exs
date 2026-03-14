@@ -166,6 +166,22 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     refute backoff_line =~ "\\n"
   end
 
+  test "passive queue omits issues that are already running" do
+    snapshot_data =
+      {:ok,
+       %{
+         running: [running_entry(%{identifier: "MT-880"})],
+         retrying: [],
+         tracked: [tracked_entry(%{issue_id: "issue-merge-pending", issue_identifier: "MT-880"})],
+         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         rate_limits: nil
+       }}
+
+    rendered = render_snapshot(snapshot_data, 0.0)
+
+    refute rendered =~ "Passive queue"
+  end
+
   test "snapshot fixture: unlimited credits variant" do
     snapshot_data =
       {:ok,

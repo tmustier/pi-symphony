@@ -689,7 +689,7 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp tracked_issue_key(entry) when is_map(entry) do
-    map_path(entry, [:issue_id]) || map_path(entry, [:identifier]) || map_path(entry, [:issue_identifier])
+    map_path(entry, [:issue_identifier]) || map_path(entry, [:identifier]) || map_path(entry, [:issue_id])
   end
 
   defp tracked_issue_key(_entry), do: nil
