@@ -2204,7 +2204,6 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
                  %{workspace_path: nil, worker_host: nil},
                  runner: runner,
                  issue_fetcher: issue_fetcher,
-                 repo_slug: "acme/widgets",
                  tracker_module: Memory
                )
 

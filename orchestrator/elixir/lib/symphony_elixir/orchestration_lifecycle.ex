@@ -462,12 +462,17 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp merge_pr_context(runtime, _pr_result, opts, settings) do
     pr_metadata = current_pr_metadata(runtime)
-    repo_slug = Keyword.get(opts, :repo_slug)
+    pr_url = Map.get(pr_metadata, "url")
 
     context = %{
       number: Map.get(pr_metadata, "number"),
-      repo_slug: repo_slug,
-      url: Map.get(pr_metadata, "url"),
+      repo_slug:
+        pick_string([
+          Keyword.get(opts, :repo_slug),
+          Map.get(pr_metadata, "repo_slug"),
+          repo_slug_from_pr_url(pr_url)
+        ]),
+      url: pr_url,
       expected_head_sha:
         expected_merge_head_sha(
           runtime,
@@ -709,6 +714,21 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp normalize_tracker_state(_state), do: ""
+
+  defp repo_slug_from_pr_url(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{host: host, path: path} when host in ["github.com", "www.github.com"] and is_binary(path) ->
+        case String.split(String.trim_leading(path, "/"), "/", trim: true) do
+          [owner, repo, "pull", _pr_number | _rest] -> "#{owner}/#{repo}"
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp repo_slug_from_pr_url(_url), do: nil
 
   defp passive_pr_updates(issue, runtime, opts, settings) do
     with true <- runtime.passive_phase == true,
