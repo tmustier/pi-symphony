@@ -223,10 +223,11 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
 
     try do
       File.mkdir_p!(Path.dirname(artifact_path))
-      File.write!(artifact_path, "\n\n### Findings\n\n- none\n")
+      File.write!(artifact_path, "<!-- symphony-review-head: abc123 -->\n\n### Findings\n\n- none\n")
 
       assert {:ok, artifact} = ReviewArtifact.load_for_test(workspace)
       assert artifact.path == artifact_path
+      assert artifact.reviewed_head_sha == "abc123"
       assert artifact.body == "### Findings\n\n- none"
     after
       File.rm_rf(workspace)
@@ -392,7 +393,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-persistence"])
       {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
       File.mkdir_p!(Path.dirname(review_path))
-      File.write!(review_path, "### Findings\n\n- No actionable issues found.")
+      File.write!(review_path, "<!-- symphony-review-head: #{String.trim(head_sha)} -->\n\n### Findings\n\n- No actionable issues found.")
 
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
@@ -503,7 +504,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
       trimmed_head_sha = String.trim(head_sha)
       File.mkdir_p!(Path.dirname(review_path))
-      File.write!(review_path, "### Findings\n\n- Updated wording only.")
+      File.write!(review_path, "<!-- symphony-review-head: #{trimmed_head_sha} -->\n\n### Findings\n\n- Updated wording only.")
 
       issue = %Issue{
         id: "issue-review-same-head",
@@ -581,6 +582,116 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert runtime.workpad.metadata["review"]["comment_id"] == 555
       assert runtime.workpad.metadata["review"]["passes_completed"] == 1
       assert runtime.workpad.metadata["review"]["last_reviewed_head_sha"] == trimmed_head_sha
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle keeps the issue in reviewing when the review artifact head is stale" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-review-stale-artifact-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    review_path = ReviewArtifact.path_for_test(repo)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    issue = %Issue{
+      id: "issue-review-stale-artifact",
+      identifier: "MT-704Z",
+      state: "In Progress",
+      title: "Ignore stale review artifacts",
+      description: "Do not count an old review file for a new head",
+      url: "https://example.org/issues/MT-704Z",
+      branch_name: "feature/review-stale-artifact",
+      labels: ["symphony"],
+      comments: []
+    }
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/review-stale-artifact", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# review stale artifact\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-stale-artifact"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      File.mkdir_p!(Path.dirname(review_path))
+      File.write!(review_path, "<!-- symphony-review-head: stale123 -->\n\n### Findings\n\n- Stale review output.")
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok, "[]"},
+        {:ok, "https://github.com/acme/widgets/pull/92\n"},
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 92,
+             "url" => "https://github.com/acme/widgets/pull/92",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-stale-artifact",
+             "headRefOid" => String.trim(head_sha),
+             "baseRefName" => "main"
+           }
+         ])}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-stale-artifact"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-stale-artifact",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.phase == "reviewing"
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 0
+      assert runtime.workpad.metadata["observation"]["gates"]["review"] == "stale"
+      assert runtime.workpad.metadata["observation"]["next_intended_action"] == "rerun_review_for_current_head"
     after
       File.rm_rf(test_root)
 
@@ -733,7 +844,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-failure"])
       {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
       File.mkdir_p!(Path.dirname(review_path))
-      File.write!(review_path, "### Findings\n\n- Please persist this review.")
+      File.write!(review_path, "<!-- symphony-review-head: #{String.trim(head_sha)} -->\n\n### Findings\n\n- Please persist this review.")
 
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())

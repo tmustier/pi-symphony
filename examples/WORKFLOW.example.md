@@ -130,7 +130,7 @@ Operating rules:
 1. Work only inside the provided workspace.
 2. Respect `policy.*` and `issue.symphony.*` values as the source of orchestration policy.
 3. In observe mode, inspect and update workpad/observation state but do not mutate GitHub state.
-4. When self-review runs, write the structured review result to `.symphony/review.md` so Symphony can upsert the durable PR review comment and persist review metadata.
+4. When self-review runs, write the structured review result to `.symphony/review.md` with a leading `<!-- symphony-review-head: <sha> -->` line for the reviewed HEAD so Symphony can upsert the durable PR review comment and persist head-keyed review metadata.
 5. Do not ask a human for follow-up actions unless blocked by missing auth, permissions, or required tools.
 6. Final output should summarize completed work, validation run, blockers, proof artifacts, current phase, current PR status, and next intended action.
 

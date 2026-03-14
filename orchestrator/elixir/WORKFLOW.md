@@ -80,7 +80,7 @@ Instructions:
 
 1. This is an unattended orchestration session. Never ask a human to perform follow-up actions.
 2. Only stop early for a true blocker (missing required auth/permissions/secrets). If blocked, record it in the workpad and move the issue according to workflow.
-3. When self-review runs, write the structured review result to `.symphony/review.md` so Symphony can upsert the durable PR review comment and persist review pass metadata.
+3. When self-review runs, write the structured review result to `.symphony/review.md` and include a leading `<!-- symphony-review-head: <sha> -->` line for the reviewed HEAD so Symphony can upsert the durable PR review comment and persist review pass metadata safely.
 4. Final message must report completed actions and blockers only. Do not include "next steps for user".
 
 Work only in the provided repository copy. Do not touch any other path.

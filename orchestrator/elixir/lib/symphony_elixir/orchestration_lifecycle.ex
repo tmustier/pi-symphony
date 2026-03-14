@@ -118,8 +118,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       match?({:error, _reason}, pr_result) and settings.pr.auto_create == true and settings.rollout.mode in ["mutate", "merge"] ->
         Map.merge(base_updates, %{phase: "blocked", waiting_reason: "tool_unavailable", next_intended_action: "restore_pr_tooling"})
 
-      match?({:error, _reason}, review_result) ->
-        Map.merge(base_updates, %{phase: "reviewing", waiting_reason: nil, next_intended_action: "repair_review_comment_persistence"})
+      review_persistence_blocked?(review_result) ->
+        Map.merge(base_updates, %{phase: "reviewing", waiting_reason: nil, next_intended_action: review_followup_action(review_result)})
 
       true ->
         base_updates
@@ -206,6 +206,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp review_gate(_runtime, _pr_metadata, {:skip, %{reason: :review_comment_mode_off}}, _settings), do: "disabled"
   defp review_gate(_runtime, _pr_metadata, {:skip, %{reason: :observe_only}}, _settings), do: "observe_only"
   defp review_gate(_runtime, _pr_metadata, {:skip, %{reason: :missing_review_body}}, _settings), do: "missing"
+  defp review_gate(_runtime, _pr_metadata, {:skip, %{reason: :stale_review_artifact}}, _settings), do: "stale"
   defp review_gate(_runtime, _pr_metadata, {:error, _reason}, _settings), do: "tool_unavailable"
 
   defp review_gate(runtime, pr_metadata, _review_result, _settings) do
@@ -224,11 +225,18 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp review_head_state(_current_head_sha, _last_reviewed_head_sha, _passes_completed), do: "missing"
 
+  defp review_persistence_blocked?({:error, _reason}), do: true
+  defp review_persistence_blocked?({:skip, %{reason: reason}}), do: reason in [:missing_review_body, :stale_review_artifact]
+  defp review_persistence_blocked?(_review_result), do: false
+
+  defp review_followup_action({:skip, %{next_intended_action: action}}) when is_binary(action), do: action
+  defp review_followup_action({:error, _reason}), do: "repair_review_comment_persistence"
+  defp review_followup_action(_review_result), do: "persist_review_artifact"
+
   defp maybe_persist_review_comment(_issue, runtime, pr_result, running_entry, opts, settings) do
     with true <- settings.review.enabled == true,
          {:ok, pr_info} <- pr_result,
-         {:ok, artifact} <- load_review_artifact(running_entry),
-         %{} = artifact <- artifact do
+         {:ok, artifact} <- load_current_review_artifact(running_entry, pr_info) do
       PullRequests.upsert_review_comment(
         %{
           number: Map.get(pr_info, :number),
@@ -242,7 +250,18 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       false -> {:skip, %{reason: :review_disabled}}
       {:skip, _details} = skip -> skip
       {:error, _reason} = error -> error
-      :missing -> {:skip, %{reason: :missing_review_body}}
+    end
+  end
+
+  defp load_current_review_artifact(running_entry, pr_info) when is_map(running_entry) and is_map(pr_info) do
+    with {:ok, artifact} <- load_review_artifact(running_entry),
+         %{} = artifact <- artifact,
+         :ok <- validate_review_artifact_head(artifact, pr_info) do
+      {:ok, artifact}
+    else
+      :missing -> {:skip, %{reason: :missing_review_body, next_intended_action: "persist_review_artifact"}}
+      {:review_head, _reason} -> {:skip, %{reason: :stale_review_artifact, next_intended_action: "rerun_review_for_current_head"}}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -250,6 +269,18 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     running_entry
     |> Map.get(:workspace_path)
     |> ReviewArtifact.load()
+  end
+
+  defp validate_review_artifact_head(artifact, pr_info) when is_map(artifact) and is_map(pr_info) do
+    current_head_sha = Map.get(pr_info, :head_sha)
+    reviewed_head_sha = Map.get(artifact, :reviewed_head_sha)
+
+    cond do
+      not is_binary(current_head_sha) -> {:review_head, :missing_current_head}
+      not is_binary(reviewed_head_sha) -> {:review_head, :missing_artifact_head}
+      reviewed_head_sha != current_head_sha -> {:review_head, :mismatch}
+      true -> :ok
+    end
   end
 
   defp review_update(runtime, pr_metadata, {:ok, details}) do

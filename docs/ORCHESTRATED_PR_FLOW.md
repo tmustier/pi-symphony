@@ -224,7 +224,7 @@ This document only requires that:
 - review pass accounting is keyed to HEAD SHA continuity
 - review passes count only after review results are successfully persisted
 - a new commit invalidates an old review for merge purposes
-- the worker leaves the canonical structured review artifact at `.symphony/review.md` before the runtime upserts the durable PR review comment
+- the worker leaves the canonical structured review artifact at `.symphony/review.md` with a leading `<!-- symphony-review-head: <sha> -->` line before the runtime upserts the durable PR review comment
 
 ## 8. Merge authorization and `Merging`
 

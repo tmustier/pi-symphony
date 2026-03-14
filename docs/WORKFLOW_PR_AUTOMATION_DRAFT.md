@@ -293,7 +293,7 @@ Phase behavior:
 PR and review rules:
 1. Reuse the existing branch PR when allowed by policy.
 2. Do not create duplicate PRs for the same branch.
-3. Write the structured review artifact to `.symphony/review.md` before handoff so runtime-owned comment upsert can persist it durably.
+3. Write the structured review artifact to `.symphony/review.md` with a leading `<!-- symphony-review-head: <sha> -->` line before handoff so runtime-owned comment upsert can persist it durably.
 4. Upsert one review comment marked with `{{ policy.pr.review_comment_marker }}` when policy says to do so.
 5. Review findings are inputs to judgment, not mandatory edits.
 6. Only findings in `{{ policy.review.fix_consideration_severities }}` must be explicitly evaluated for fixes.
