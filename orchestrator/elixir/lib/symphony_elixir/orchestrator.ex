@@ -702,6 +702,16 @@ defmodule SymphonyElixir.Orchestrator do
     |> Map.get(:dispatch_allowed, true)
   end
 
+  defp issue_orchestration_phase(%Issue{} = issue) do
+    issue
+    |> OrchestrationPolicy.issue_runtime(Config.settings!())
+    |> Map.get(:phase)
+  rescue
+    _ -> nil
+  end
+
+  defp issue_orchestration_phase(_issue), do: nil
+
   defp issue_routable_to_worker?(%Issue{assigned_to_worker: assigned_to_worker})
        when is_boolean(assigned_to_worker),
        do: assigned_to_worker
@@ -815,6 +825,7 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
+            orchestration_phase: issue_orchestration_phase(issue),
             retry_attempt: normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now()
           })

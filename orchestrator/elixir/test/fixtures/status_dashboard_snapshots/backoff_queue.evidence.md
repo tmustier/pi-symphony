@@ -5,6 +5,7 @@
 │ Runtime: 45m 0s
 │ Tokens: in 18,000 | out 2,200 | total 20,200
 │ Rate Limits: gpt-5 | primary 0/20,000 reset 95s | secondary 0/60 reset 45s | credits none
+│ Rollout: mutate
 │ Project: https://linear.app/project/project/issues
 │ Next refresh: n/a
 ├─ Running

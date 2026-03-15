@@ -366,6 +366,7 @@ defmodule SymphonyElixir.StatusDashboard do
              colorize(" | ", @ansi_gray) <>
              colorize("total #{format_count(codex_total_tokens)}", @ansi_yellow),
            colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
+           format_rollout_mode_line(),
            project_link_lines,
            project_refresh_line,
            colorize("├─ Running", @ansi_bold),
@@ -416,6 +417,31 @@ defmodule SymphonyElixir.StatusDashboard do
       _ ->
         [project_line]
     end
+  end
+
+  defp format_rollout_mode_line do
+    settings = Config.settings!()
+    mode = settings.rollout.mode || "unknown"
+
+    mode_color =
+      case mode do
+        "observe" -> @ansi_cyan
+        "mutate" -> @ansi_orange
+        "merge" -> @ansi_green
+        _ -> @ansi_gray
+      end
+
+    kill_switch_file = settings.rollout.kill_switch_file
+    file_active = is_binary(kill_switch_file) and File.exists?(kill_switch_file)
+
+    kill_switch_suffix =
+      if file_active do
+        colorize(" | ", @ansi_gray) <> colorize("KILL SWITCH ACTIVE", @ansi_red)
+      else
+        ""
+      end
+
+    colorize("│ Rollout: ", @ansi_bold) <> colorize(mode, mode_color) <> kill_switch_suffix
   end
 
   defp format_project_refresh_line(%{checking?: true}) do
@@ -604,7 +630,10 @@ defmodule SymphonyElixir.StatusDashboard do
     turn_count = Map.get(running_entry, :turn_count, 0)
     age = format_cell(format_runtime_and_turns(runtime_seconds, turn_count), @running_age_width)
     event = running_entry.last_codex_event || "none"
-    event_label = format_cell(summarize_message(running_entry.last_codex_message), running_event_width)
+    phase = running_phase_label(running_entry)
+    phase_width = if phase == "", do: 0, else: String.length(phase) + 1
+    adjusted_event_width = max(@running_event_min_width, running_event_width - phase_width)
+    event_label = format_cell(summarize_message(running_entry.last_codex_message), adjusted_event_width)
 
     tokens = format_count(total_tokens) |> format_cell(@running_tokens_width, :right)
 
@@ -615,6 +644,13 @@ defmodule SymphonyElixir.StatusDashboard do
         "codex/event/task_started" -> @ansi_green
         "turn_completed" -> @ansi_magenta
         _ -> @ansi_blue
+      end
+
+    phase_part =
+      if phase != "" do
+        " " <> colorize(phase, running_phase_color(phase))
+      else
+        ""
       end
 
     [
@@ -633,10 +669,25 @@ defmodule SymphonyElixir.StatusDashboard do
       " ",
       colorize(session, @ansi_cyan),
       " ",
-      colorize(event_label, status_color)
+      colorize(event_label, status_color),
+      phase_part
     ]
     |> Enum.join("")
   end
+
+  defp running_phase_label(entry) do
+    case Map.get(entry, :orchestration_phase) do
+      phase when is_binary(phase) and phase != "" -> "[#{phase}]"
+      _ -> ""
+    end
+  end
+
+  defp running_phase_color("[blocked]"), do: @ansi_red
+  defp running_phase_color("[waiting_for_human]"), do: @ansi_yellow
+  defp running_phase_color("[waiting_for_checks]"), do: @ansi_cyan
+  defp running_phase_color("[merging]"), do: @ansi_green
+  defp running_phase_color("[ready_to_merge]"), do: @ansi_green
+  defp running_phase_color(_phase), do: @ansi_gray
 
   @doc false
   @spec format_running_summary_for_test(map(), integer() | nil) :: String.t()
@@ -663,16 +714,44 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp format_tracked_rows(running, retrying, tracked, terminal_columns_override) do
-    tracked
-    |> passive_tracked_entries(running, retrying)
-    |> case do
-      [] ->
-        []
+    active_rows =
+      tracked
+      |> active_tracked_entries(running, retrying)
+      |> case do
+        [] ->
+          []
 
-      passive_tracked ->
-        [colorize("├─ Passive queue", @ansi_bold), "│"] ++
-          Enum.map(passive_tracked, &format_tracked_summary(&1, terminal_columns_override))
-    end
+        active_tracked ->
+          [colorize("├─ Queued", @ansi_bold), "│"] ++
+            Enum.map(active_tracked, &format_tracked_summary(&1, terminal_columns_override))
+      end
+
+    passive_rows =
+      tracked
+      |> passive_tracked_entries(running, retrying)
+      |> case do
+        [] ->
+          []
+
+        passive_tracked ->
+          [colorize("├─ Passive queue", @ansi_bold), "│"] ++
+            Enum.map(passive_tracked, &format_tracked_summary(&1, terminal_columns_override))
+      end
+
+    active_rows ++ passive_rows
+  end
+
+  defp active_tracked_entries(tracked, running, retrying) do
+    active_issue_keys =
+      running
+      |> Enum.map(&tracked_issue_key/1)
+      |> Kernel.++(Enum.map(retrying, &tracked_issue_key/1))
+      |> MapSet.new()
+
+    tracked
+    |> Enum.reject(&(Map.get(&1, :passive_phase, false) == true))
+    |> Enum.reject(&(MapSet.member?(active_issue_keys, tracked_issue_key(&1)) and tracked_issue_key(&1) != nil))
+    |> Enum.sort_by(&{Map.get(&1, :issue_identifier) || "", Map.get(&1, :issue_id) || ""})
   end
 
   defp passive_tracked_entries(tracked, running, retrying) do

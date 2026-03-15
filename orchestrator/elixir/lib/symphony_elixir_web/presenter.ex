@@ -124,6 +124,7 @@ defmodule SymphonyElixirWeb.Presenter do
     |> maybe_put(:session_file, Map.get(entry, :session_file))
     |> maybe_put(:session_dir, Map.get(entry, :session_dir))
     |> maybe_put(:proof, proof_payload(entry))
+    |> maybe_put(:orchestration_phase, Map.get(entry, :orchestration_phase))
   end
 
   defp retry_entry_payload(entry) do
