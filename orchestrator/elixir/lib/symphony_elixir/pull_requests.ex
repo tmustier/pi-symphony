@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PullRequests do
   Resolves and publishes branch pull requests through the GitHub CLI.
   """
 
-  alias SymphonyElixir.{Config, Linear.Issue}
+  alias SymphonyElixir.{Config, Linear.Issue, MapUtils}
 
   @type pr_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
   @type pr_state_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
@@ -839,7 +839,6 @@ defmodule SymphonyElixir.PullRequests do
 
   defp to_status_token(nil), do: nil
   defp to_status_token(value) when is_binary(value), do: String.upcase(String.trim(value))
-  defp to_status_token(_value), do: nil
 
   defp merge_commit_sha(%{"oid" => oid}), do: pick_optional_string([oid])
   defp merge_commit_sha(_value), do: nil
@@ -958,16 +957,5 @@ defmodule SymphonyElixir.PullRequests do
     end
   end
 
-  defp pick_optional_string(values) when is_list(values) do
-    Enum.find_value(values, fn
-      value when is_binary(value) ->
-        case String.trim(value) do
-          "" -> nil
-          normalized -> normalized
-        end
-
-      _ ->
-        nil
-    end)
-  end
+  defp pick_optional_string(values) when is_list(values), do: MapUtils.pick_string(values)
 end
