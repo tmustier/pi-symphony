@@ -64,6 +64,7 @@ rollout:
 pr:
   auto_create: true
   base_branch: main
+  repo_slug: owner/repo
   reuse_branch_pr: true
   closed_pr_policy: new_branch
   attach_to_tracker: true

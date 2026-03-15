@@ -339,6 +339,7 @@ defmodule SymphonyElixir.Config.Schema do
     embedded_schema do
       field(:auto_create, :boolean, default: false)
       field(:base_branch, :string, default: "main")
+      field(:repo_slug, :string)
       field(:reuse_branch_pr, :boolean, default: true)
       field(:closed_pr_policy, :string, default: "new_branch")
       field(:attach_to_tracker, :boolean, default: true)
@@ -355,6 +356,7 @@ defmodule SymphonyElixir.Config.Schema do
         [
           :auto_create,
           :base_branch,
+          :repo_slug,
           :reuse_branch_pr,
           :closed_pr_policy,
           :attach_to_tracker,
@@ -928,7 +930,7 @@ defmodule SymphonyElixir.Config.Schema do
       {"orchestration", ["phase_store", "default_phase", "passive_phases", "max_rework_cycles", "ownership"]},
       {"orchestration.ownership", ["required_label", "required_workpad_marker"]},
       {"rollout", ["mode", "preflight_required", "kill_switch_label", "kill_switch_file"]},
-      {"pr", ["auto_create", "base_branch", "reuse_branch_pr", "closed_pr_policy", "attach_to_tracker", "required_labels", "review_comment_mode", "review_comment_marker"]},
+      {"pr", ["auto_create", "base_branch", "repo_slug", "reuse_branch_pr", "closed_pr_policy", "attach_to_tracker", "required_labels", "review_comment_mode", "review_comment_marker"]},
       {"review", ["enabled", "agent", "output_format", "max_passes", "fix_consideration_severities"]},
       {"merge", ["mode", "executor", "method", "require_green_checks", "require_head_match", "require_human_approval", "approval_states", "completion_state"]}
     ]
