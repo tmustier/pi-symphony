@@ -153,8 +153,31 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       merge_execution_failed?(merge_result) ->
         Map.merge(base_updates, %{phase: "blocked", waiting_reason: "tool_unavailable", next_intended_action: "repair_merge_tooling"})
 
+      rework_cycles_exceeded?(base_updates, runtime, settings) ->
+        Map.merge(base_updates, %{phase: "blocked", waiting_reason: "rework_limit_exceeded", next_intended_action: "operator_intervention_required"})
+
       true ->
         base_updates
+    end
+  end
+
+  defp rework_cycles_exceeded?(updates, runtime, settings) do
+    phase = Map.get(updates, :phase)
+    max_rework_cycles = settings.orchestration.max_rework_cycles
+    rework_cycles = current_rework_cycles(runtime)
+
+    phase == "rework" and is_integer(max_rework_cycles) and rework_cycles >= max_rework_cycles
+  end
+
+  defp current_rework_cycles(runtime) do
+    runtime
+    |> fetch_value(:workpad)
+    |> fetch_value(:metadata)
+    |> normalize_map()
+    |> Map.get("rework_cycles")
+    |> case do
+      count when is_integer(count) -> count
+      _ -> 0
     end
   end
 
@@ -323,6 +346,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp maybe_persist_review_comment(_issue, runtime, pr_result, running_entry, opts, settings) do
     with true <- settings.review.enabled == true,
          true <- review_persistence_phase?(runtime.phase),
+         :ok <- review_passes_remaining?(runtime, settings),
          {:ok, pr_info} <- pr_result,
          {:ok, artifact} <- load_current_review_artifact(running_entry, pr_info) do
       PullRequests.upsert_review_comment(
@@ -434,6 +458,17 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     |> normalize_map()
     |> Map.get("merge", %{})
     |> normalize_map()
+  end
+
+  defp review_passes_remaining?(runtime, settings) do
+    max_passes = settings.review.max_passes
+    passes_completed = current_review_metadata(runtime) |> Map.get("passes_completed") || 0
+
+    if is_integer(max_passes) and is_integer(passes_completed) and passes_completed >= max_passes do
+      {:skip, %{reason: :max_review_passes_reached, passes_completed: passes_completed, max_passes: max_passes}}
+    else
+      :ok
+    end
   end
 
   defp review_persistence_phase?(phase), do: phase in ["implementing", "reviewing", "rework"]

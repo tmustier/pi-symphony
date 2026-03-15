@@ -3250,4 +3250,226 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
         else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
     end
   end
+
+  test "post-run lifecycle skips review comment persistence when max review passes are reached" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-review-max-passes-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    review_path = ReviewArtifact.path_for_test(repo)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    issue = %Issue{
+      id: "issue-review-max-passes",
+      identifier: "MT-MAX1",
+      state: "In Review",
+      title: "Max review passes",
+      description: "Should skip review when max passes reached",
+      url: "https://example.org/issues/MT-MAX1",
+      branch_name: "feature/review-max-passes",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-max-passes",
+          body: """
+          ## Symphony Workpad
+
+          ```yaml
+          symphony:
+            schema_version: 1
+            owned: true
+            phase: reviewing
+            rework_cycles: 0
+            branch: feature/review-max-passes
+            pr:
+              number: 99
+              url: https://github.com/acme/widgets/pull/99
+              head_sha: abc1234
+            review:
+              comment_id: 555
+              passes_completed: 2
+              last_reviewed_head_sha: abc1234
+              last_fixed_head_sha: null
+            merge:
+              last_attempted_head_sha: null
+          ```
+          """,
+          updated_at: "2026-03-14T00:00:00Z"
+        }
+      ]
+    }
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/review-max-passes", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# review max passes\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-max-passes"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      File.mkdir_p!(Path.dirname(review_path))
+      File.write!(review_path, "<!-- symphony-review-head: #{String.trim(head_sha)} -->\n\n### Findings\n\n- New finding.")
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      # PR lookup returns existing PR; no review comment upsert should be attempted
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 99,
+             "url" => "https://github.com/acme/widgets/pull/99",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-max-passes",
+             "headRefOid" => String.trim(head_sha),
+             "baseRefName" => "main"
+           }
+         ])}
+      ])
+
+      runner = fn command, args, _opts ->
+        send(self(), {:github_command, command, args})
+
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-max-passes"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-max-passes",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      # Review passes should NOT have increased beyond 2
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 2
+      # Should not have attempted a review comment upsert (only PR lookup)
+      refute_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/99/comments" | _]}
+    after
+      File.rm_rf(test_root)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "post-run lifecycle blocks rework phase when max rework cycles are exceeded" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: false,
+      orchestration_max_rework_cycles: 2
+    )
+
+    issue = %Issue{
+      id: "issue-rework-limit",
+      identifier: "MT-RW1",
+      state: "Rework",
+      title: "Rework limit test",
+      description: "Should block when rework cycles exhausted",
+      url: "https://example.org/issues/MT-RW1",
+      branch_name: "feature/rework-limit",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-rework-limit",
+          body: """
+          ## Symphony Workpad
+
+          ```yaml
+          symphony:
+            schema_version: 1
+            owned: true
+            phase: rework
+            rework_cycles: 2
+            branch: feature/rework-limit
+            pr:
+              number: null
+              url: null
+              head_sha: null
+            review:
+              comment_id: null
+              passes_completed: 0
+              last_reviewed_head_sha: null
+              last_fixed_head_sha: null
+            merge:
+              last_attempted_head_sha: null
+          ```
+          """,
+          updated_at: "2026-03-14T00:00:00Z"
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      runner = fn _command, _args, _opts -> {:error, :should_not_be_called} end
+      issue_fetcher = fn ["issue-rework-limit"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-rework-limit",
+                 %{workspace_path: nil, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.phase == "blocked"
+      assert runtime.waiting_reason == "rework_limit_exceeded"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
 end

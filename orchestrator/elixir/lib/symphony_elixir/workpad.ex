@@ -178,8 +178,19 @@ defmodule SymphonyElixir.Workpad do
 
   defp select_rework_cycles(current_metadata, updates) do
     case Map.get(updates, :rework_cycles) do
-      value when is_integer(value) and value >= 0 -> value
-      _ -> fetch_nested_integer(current_metadata, ["rework_cycles"]) || 0
+      value when is_integer(value) and value >= 0 ->
+        value
+
+      _ ->
+        current_cycles = fetch_nested_integer(current_metadata, ["rework_cycles"]) || 0
+        current_phase = fetch_nested_string(current_metadata, ["phase"])
+        target_phase = update_string(updates, :phase)
+
+        if target_phase == "rework" and current_phase != "rework" do
+          current_cycles + 1
+        else
+          current_cycles
+        end
     end
   end
 
