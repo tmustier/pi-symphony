@@ -1172,14 +1172,16 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue)
 
-    assert prompt =~ "You are working on a Linear issue."
-    assert prompt =~ "Identifier: MT-777"
-    assert prompt =~ "Title: Make fallback prompt useful"
-    assert prompt =~ "Body:"
+    assert prompt =~ "You are an unattended coding agent"
+    assert prompt =~ "identifier: MT-777"
+    assert prompt =~ "title: Make fallback prompt useful"
     assert prompt =~ "Include enough issue context to start working."
+    assert prompt =~ "Read AGENTS.md"
+    assert prompt =~ "branch"
     assert Config.workflow_prompt() =~ "{{ issue.identifier }}"
     assert Config.workflow_prompt() =~ "{{ issue.title }}"
     assert Config.workflow_prompt() =~ "{{ issue.description }}"
+    assert Config.workflow_prompt() =~ "{{ issue.branch_name }}"
   end
 
   test "prompt builder default template handles missing issue body" do
@@ -1196,8 +1198,8 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue)
 
-    assert prompt =~ "Identifier: MT-778"
-    assert prompt =~ "Title: Handle empty body"
+    assert prompt =~ "identifier: MT-778"
+    assert prompt =~ "title: Handle empty body"
     assert prompt =~ "No description provided."
   end
 

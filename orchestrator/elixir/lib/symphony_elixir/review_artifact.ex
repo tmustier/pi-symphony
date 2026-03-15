@@ -33,6 +33,13 @@ defmodule SymphonyElixir.ReviewArtifact do
     Path.join(workspace_path, @relative_path)
   end
 
+  @spec exists?(Path.t()) :: boolean()
+  def exists?(workspace_path) when is_binary(workspace_path) do
+    workspace_path |> artifact_path() |> File.exists?()
+  end
+
+  def exists?(_workspace_path), do: false
+
   @spec load(Path.t() | nil) :: {:ok, artifact()} | {:ok, :missing} | {:error, term()}
   def load(workspace_path) when is_binary(workspace_path) do
     path = artifact_path(workspace_path)
