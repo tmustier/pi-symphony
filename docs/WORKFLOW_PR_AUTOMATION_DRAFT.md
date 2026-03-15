@@ -8,7 +8,7 @@ This is still a **proposed** workflow, not a currently-valid one. It assumes the
 
 - `docs/ORCHESTRATED_PR_FLOW.md`
 - `docs/PR_AUTOMATION_SCHEMA_PROPOSAL.md`
-- `docs/PR_AUTOMATION_REVIEW_SYNTHESIS.md`
+- `docs/archive/PR_AUTOMATION_REVIEW_SYNTHESIS.md`
 
 **Prerequisite callout:** this draft uses `policy.*` prompt variables that do **not** exist in the current repo yet. The draft only becomes valid after `PromptBuilder` is extended to expose policy maps into the workflow template context. Until then, treat this as a target-state draft rather than a drop-in runnable workflow.
 

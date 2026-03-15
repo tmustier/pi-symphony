@@ -177,5 +177,5 @@ When parallelizing work on this repo:
 See:
 
 - `docs/PLAN.md`
-- `docs/UPSTREAM.md`
+- `docs/archive/UPSTREAM.md`
 - `THIRD_PARTY_NOTICES.md`

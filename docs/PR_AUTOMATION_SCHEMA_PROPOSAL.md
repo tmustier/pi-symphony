@@ -5,7 +5,7 @@ Status: Draft proposal (revised after review)
 This document proposes the config and runtime contract needed to support the revised PR automation design described in:
 
 - `docs/ORCHESTRATED_PR_FLOW.md`
-- `docs/PR_AUTOMATION_REVIEW_SYNTHESIS.md`
+- `docs/archive/PR_AUTOMATION_REVIEW_SYNTHESIS.md`
 - `docs/WORKFLOW_PR_AUTOMATION_DRAFT.md`
 
 The focus here is practical: what needs to change in the current Symphony + Pi code layout so the workflow contract becomes implementable and safe.

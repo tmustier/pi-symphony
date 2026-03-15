@@ -379,6 +379,6 @@ Implementation should only begin after those docs reflect:
 
 ## 16. Companion docs
 
-- `docs/PR_AUTOMATION_REVIEW_SYNTHESIS.md`
+- `docs/archive/PR_AUTOMATION_REVIEW_SYNTHESIS.md`
 - `docs/PR_AUTOMATION_SCHEMA_PROPOSAL.md`
 - `docs/WORKFLOW_PR_AUTOMATION_DRAFT.md`
