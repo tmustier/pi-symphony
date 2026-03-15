@@ -1052,6 +1052,14 @@ defmodule SymphonyElixir.Orchestrator do
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
 
   defp run_terminal_workspace_cleanup do
+    if Config.settings!().rollout.mode == "observe" do
+      Logger.info("Skipping terminal workspace cleanup in observe mode")
+    else
+      run_terminal_workspace_cleanup!()
+    end
+  end
+
+  defp run_terminal_workspace_cleanup! do
     case Tracker.fetch_issues_by_states(Config.settings!().tracker.terminal_states) do
       {:ok, issues} ->
         issues

@@ -90,8 +90,9 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     passive_phase = workpad.phase in settings.orchestration.passive_phases
     rework_limit_active = rework_limit_active?(workpad, settings)
     blocking_reason = policy_blocking_reason(ownership, kill_switch, rework_limit_active)
+    observe_only = settings.rollout.mode == "observe"
     base_dispatch_allowed = is_nil(blocking_reason)
-    dispatch_allowed = base_dispatch_allowed and not passive_phase
+    dispatch_allowed = base_dispatch_allowed and not passive_phase and not observe_only
 
     %{
       phase: workpad.phase,
