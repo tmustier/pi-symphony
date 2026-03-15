@@ -29,23 +29,31 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   @spec bootstrap_issue(Issue.t(), keyword()) :: {:ok, Issue.t()} | {:error, term()}
   def bootstrap_issue(%Issue{} = issue, opts \\ []) do
     settings = Keyword.get(opts, :settings, Config.settings!())
+    tracker_module = Keyword.get(opts, :tracker_module, Tracker)
+    now = Keyword.get(opts, :now, DateTime.utc_now() |> DateTime.truncate(:second))
     runtime = OrchestrationPolicy.issue_runtime(issue, settings)
     passive_pr_updates = passive_pr_updates(issue, runtime, opts, settings)
 
     if manage_workpad?(issue, runtime) do
-      Workpad.sync(
-        issue,
-        %{
-          owned: managed_owned?(issue, runtime),
-          phase: bootstrap_phase(runtime, passive_pr_updates),
-          branch: issue.branch_name,
-          pr: Map.get(passive_pr_updates, :pr),
-          waiting_reason: Map.get(passive_pr_updates, :waiting_reason, runtime.waiting_reason),
-          next_intended_action: Map.get(passive_pr_updates, :next_intended_action, runtime.next_intended_action),
-          observation_gates: Map.merge(bootstrap_gates(issue, runtime), Map.get(passive_pr_updates, :observation_gates, %{}))
-        },
-        Keyword.put(opts, :settings, settings)
-      )
+      phase = bootstrap_phase(runtime, passive_pr_updates)
+      merge_result = maybe_passive_merge(issue, runtime, phase, passive_pr_updates, opts, settings)
+
+      base_updates = %{
+        owned: managed_owned?(issue, runtime),
+        phase: phase,
+        branch: issue.branch_name,
+        pr: Map.get(passive_pr_updates, :pr),
+        waiting_reason: Map.get(passive_pr_updates, :waiting_reason, runtime.waiting_reason),
+        next_intended_action: Map.get(passive_pr_updates, :next_intended_action, runtime.next_intended_action),
+        observation_gates: Map.merge(bootstrap_gates(issue, runtime), Map.get(passive_pr_updates, :observation_gates, %{}))
+      }
+
+      updates = apply_passive_merge_updates(base_updates, merge_result, runtime, settings, now)
+
+      with {:ok, updated_issue} <-
+             Workpad.sync(issue, updates, Keyword.merge(opts, settings: settings, tracker_module: tracker_module, now: now)) do
+        maybe_reconcile_tracker_completion(updated_issue, merge_result, tracker_module, settings)
+      end
     else
       {:ok, issue}
     end
@@ -515,6 +523,72 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp merge_phase?(phase), do: phase in ["ready_to_merge", "merging"]
 
+  defp maybe_passive_merge(issue, _runtime, "ready_to_merge", passive_pr_updates, opts, settings) do
+    pr = Map.get(passive_pr_updates, :pr, %{})
+    pr_number = Map.get(pr, :number) || Map.get(pr, "number")
+    pr_url = Map.get(pr, :url) || Map.get(pr, "url")
+
+    if pr_number != nil and human_approval_ready?(issue, settings) do
+      context = %{
+        number: pr_number,
+        repo_slug: pick_string([
+          Keyword.get(opts, :repo_slug),
+          Map.get(pr, :repo_slug),
+          settings.pr.repo_slug,
+          repo_slug_from_pr_url(pr_url)
+        ]),
+        url: pr_url,
+        expected_head_sha: Map.get(pr, :head_sha)
+      }
+
+      PullRequests.merge_if_head_matches(context, Keyword.put(opts, :settings, settings))
+    else
+      {:skip, %{reason: :merge_not_requested}}
+    end
+  end
+
+  defp maybe_passive_merge(_issue, _runtime, _phase, _passive_pr_updates, _opts, _settings) do
+    {:skip, %{reason: :merge_not_requested}}
+  end
+
+  defp apply_passive_merge_updates(updates, merge_result, _runtime, _settings, now) do
+    cond do
+      merge_successful?(merge_result) or merge_already_completed?(merge_result) ->
+        merge_meta = merge_update(Map.get(updates, :pr, %{}), merge_result, now)
+
+        Map.merge(updates, %{
+          phase: "merging",
+          waiting_reason: nil,
+          next_intended_action: "reconcile_tracker_completion",
+          merge: merge_meta,
+          observation_gates: Map.merge(Map.get(updates, :observation_gates, %{}), %{
+            "mergeability" => "pass",
+            "pr" => "merged"
+          })
+        })
+
+      merge_completion_pending_or_done?(merge_result) ->
+        merge_meta = merge_update(Map.get(updates, :pr, %{}), merge_result, now)
+
+        Map.merge(updates, %{
+          phase: "merging",
+          waiting_reason: nil,
+          next_intended_action: "confirm_merge_completion",
+          merge: merge_meta
+        })
+
+      match?({:error, _reason}, merge_result) ->
+        Map.merge(updates, %{
+          phase: "blocked",
+          waiting_reason: "tool_unavailable",
+          next_intended_action: "repair_merge_tooling"
+        })
+
+      true ->
+        updates
+    end
+  end
+
   defp maybe_merge_pull_request(issue, runtime, pr_result, opts, settings) do
     if merge_phase?(runtime.phase) do
       with {:ok, context} <- merge_pr_context(runtime, pr_result, opts, settings) do
@@ -957,13 +1031,31 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
       case PullRequests.resolve_or_create(issue, git_state, Keyword.put(opts, :settings, settings)) do
         {:ok, pr_info} ->
-          %{
+          head_sha = Map.get(pr_info, :head_sha)
+          review_recovery = maybe_recover_review_artifact(issue, pr_info, runtime, opts, settings)
+
+          base = %{
             phase: "waiting_for_checks",
-            pr: %{number: Map.get(pr_info, :number), url: Map.get(pr_info, :url), head_sha: Map.get(pr_info, :head_sha)},
+            pr: %{number: Map.get(pr_info, :number), url: Map.get(pr_info, :url), head_sha: head_sha},
             waiting_reason: "checks_pending",
             next_intended_action: "poll_on_next_cycle",
             observation_gates: %{"pr" => "open"}
           }
+
+          case review_recovery do
+            {:ok, details} ->
+              Map.merge(base, %{
+                review: %{
+                  comment_id: Map.get(details, :comment_id),
+                  passes_completed: 1,
+                  last_reviewed_head_sha: head_sha
+                },
+                observation_gates: Map.put(base.observation_gates, "review", "persisted")
+              })
+
+            _ ->
+              base
+          end
 
         _ ->
           %{}
@@ -972,6 +1064,34 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       %{}
     end
   end
+
+  defp maybe_recover_review_artifact(issue, pr_info, runtime, opts, settings) do
+    if settings.review.enabled == true do
+      workspace = issue_workspace_path(issue, settings)
+      running_entry = %{workspace_path: workspace}
+
+      with {:ok, artifact} <- load_current_review_artifact(running_entry, pr_info) do
+        PullRequests.upsert_review_comment(
+          %{
+            number: Map.get(pr_info, :number),
+            repo_slug: Map.get(pr_info, :repo_slug),
+            comment_id: current_review_comment_id(runtime)
+          },
+          artifact.body,
+          Keyword.put(opts, :settings, settings)
+        )
+      end
+    else
+      {:skip, %{reason: :review_disabled}}
+    end
+  end
+
+  defp issue_workspace_path(%Issue{identifier: identifier}, settings) when is_binary(identifier) do
+    safe_id = String.replace(identifier, ~r/[^a-zA-Z0-9._-]/, "_")
+    Path.join(settings.workspace.root, safe_id)
+  end
+
+  defp issue_workspace_path(_issue, _settings), do: nil
 
   defp blocked_with_tool_unavailable?(runtime) do
     runtime.phase == "blocked" and runtime.waiting_reason == "tool_unavailable"
