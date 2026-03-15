@@ -942,10 +942,51 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
          result <- PullRequests.inspect_state(context, Keyword.put(opts, :settings, settings)) do
       passive_pr_updates_from_result(result, issue, runtime, settings)
     else
-      false -> %{}
-      {:skip, _details} -> %{}
+      false ->
+        %{}
+
+      {:skip, %{reason: :missing_pr_number}} ->
+        maybe_recover_blocked_pr(issue, runtime, opts, settings)
     end
   end
+
+  defp maybe_recover_blocked_pr(issue, runtime, opts, settings) do
+    if blocked_with_tool_unavailable?(runtime) do
+      branch = workpad_branch(runtime) || issue.branch_name
+      git_state = %{branch: branch, remote_branch_published: is_binary(branch)}
+
+      case PullRequests.resolve_or_create(issue, git_state, Keyword.put(opts, :settings, settings)) do
+        {:ok, pr_info} ->
+          %{
+            phase: "waiting_for_checks",
+            pr: %{number: Map.get(pr_info, :number), url: Map.get(pr_info, :url), head_sha: Map.get(pr_info, :head_sha)},
+            waiting_reason: "checks_pending",
+            next_intended_action: "poll_on_next_cycle",
+            observation_gates: %{"pr" => "open"}
+          }
+
+        _ ->
+          %{}
+      end
+    else
+      %{}
+    end
+  end
+
+  defp blocked_with_tool_unavailable?(runtime) do
+    runtime.phase == "blocked" and runtime.waiting_reason == "tool_unavailable"
+  end
+
+  defp workpad_branch(runtime) do
+    runtime
+    |> fetch_value(:workpad)
+    |> fetch_value(:metadata)
+    |> normalize_map()
+    |> Map.get("branch")
+    |> normalize_optional_string()
+  end
+
+  defp normalize_optional_string(value), do: MapUtils.normalize_optional_string(value)
 
   defp passive_pr_context(runtime, opts) do
     pr_metadata = current_pr_metadata(runtime)
