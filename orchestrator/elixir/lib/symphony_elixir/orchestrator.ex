@@ -332,7 +332,7 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:error, reason} ->
-        Logger.debug("Failed to reconcile completed issue lifecycle issue_id=#{issue_id}: #{inspect(reason)}")
+        Logger.warning("Failed to reconcile completed issue lifecycle issue_id=#{issue_id}: #{inspect(reason)}")
         state
     end
   end

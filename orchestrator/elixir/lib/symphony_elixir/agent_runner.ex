@@ -5,8 +5,9 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, Linear.Issue, OrchestrationPolicy, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.{Config, Linear.Issue, OrchestrationPolicy, PromptBuilder, ReviewArtifact, Tracker, Workspace}
   alias SymphonyElixir.Pi.{Proof, WorkerRunner}
+  alias SymphonyElixir.WorkspaceGit
 
   @type worker_host :: String.t() | nil
 
@@ -155,15 +156,21 @@ defmodule SymphonyElixir.AgentRunner do
 
     case continue_with_issue?(issue, execution_context.issue_state_fetcher) do
       {:continue, refreshed_issue} when turn_number < max_turns ->
-        Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+        if workspace_work_completed?(execution_context.workspace) do
+          Logger.info("Worker completed implementation (branch pushed to remote); stopping agent turns for #{issue_context(refreshed_issue)} turn=#{turn_number}/#{max_turns}")
 
-        do_run_worker_turns(
-          runtime_module,
-          session,
-          refreshed_issue,
-          execution_context,
-          turn_number + 1
-        )
+          :ok
+        else
+          Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+
+          do_run_worker_turns(
+            runtime_module,
+            session,
+            refreshed_issue,
+            execution_context,
+            turn_number + 1
+          )
+        end
 
       {:continue, refreshed_issue} ->
         Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
@@ -175,6 +182,17 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp workspace_work_completed?(workspace) do
+    case WorkspaceGit.inspect_workspace(workspace) do
+      {:ok, %{remote_branch_published: true}} ->
+        review_enabled = Config.settings!().review.enabled == true
+        not review_enabled or ReviewArtifact.exists?(workspace)
+
+      _ ->
+        false
     end
   end
 
