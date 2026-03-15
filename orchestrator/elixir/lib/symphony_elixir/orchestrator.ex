@@ -193,7 +193,9 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:proof_dir, runtime_info[:proof_dir])
           |> maybe_put_runtime_value(:proof_events_path, runtime_info[:proof_events_path])
           |> maybe_put_runtime_value(:proof_summary_path, runtime_info[:proof_summary_path])
+          |> reset_stall_baseline()
 
+        log_worker_runtime_info(running_entry.identifier, issue_id, runtime_info)
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
@@ -592,6 +594,23 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp last_activity_timestamp(_running_entry), do: nil
+
+  defp log_worker_runtime_info(identifier, issue_id, runtime_info) do
+    session_file = runtime_info[:session_file]
+    workspace_path = runtime_info[:workspace_path]
+    worker_host = runtime_info[:worker_host]
+
+    Logger.info(
+      "Worker runtime ready for issue_id=#{issue_id} issue_identifier=#{identifier}" <>
+        " worker_host=#{worker_host || "local"}" <>
+        " workspace=#{workspace_path}" <>
+        if(is_binary(session_file), do: " session_file=#{session_file}", else: "")
+    )
+  end
+
+  defp reset_stall_baseline(running_entry) when is_map(running_entry) do
+    Map.put(running_entry, :last_codex_timestamp, DateTime.utc_now())
+  end
 
   defp terminate_task(pid) when is_pid(pid) do
     case Task.Supervisor.terminate_child(SymphonyElixir.TaskSupervisor, pid) do
