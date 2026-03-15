@@ -16,6 +16,14 @@ defmodule SymphonyElixir.Pi.EventMapper do
     |> Map.put(:timestamp, DateTime.utc_now())
   end
 
+  @spec heartbeat(String.t(), metadata()) :: mapped_update()
+  def heartbeat(session_id, metadata \\ %{}) when is_binary(session_id) and is_map(metadata) do
+    metadata
+    |> Map.put(:session_id, session_id)
+    |> Map.put(:event, :heartbeat)
+    |> Map.put(:timestamp, DateTime.utc_now())
+  end
+
   @spec rpc_event(payload(), String.t(), String.t(), metadata()) :: mapped_update()
   def rpc_event(payload, raw, session_id, metadata \\ %{})
       when is_map(payload) and is_binary(raw) and is_binary(session_id) and is_map(metadata) do
