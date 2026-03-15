@@ -10,6 +10,8 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
 
   alias SymphonyElixir.Pi.{EventMapper, RpcClient}
 
+  @heartbeat_interval_ms 30_000
+
   @spec start_session(Path.t(), keyword()) :: {:ok, RpcClient.session()} | {:error, term()}
   def start_session(workspace, opts \\ []) do
     RpcClient.start_session(workspace, opts)
@@ -35,19 +37,21 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
 
   defp await_turn_completion(session, turn_session_id, on_message, issue) do
     timeout_ms = issue_turn_timeout_ms()
-    receive_loop(session, turn_session_id, on_message, issue, timeout_ms, "")
+    heartbeat_ms = min(@heartbeat_interval_ms, timeout_ms)
+    started_at = System.monotonic_time(:millisecond)
+    receive_loop(session, turn_session_id, on_message, issue, timeout_ms, "", started_at, heartbeat_ms)
   end
 
-  defp receive_loop(session, turn_session_id, on_message, issue, timeout_ms, pending_line) do
-    case RpcClient.receive_message(session, timeout_ms, pending_line) do
+  defp receive_loop(session, turn_session_id, on_message, issue, timeout_ms, pending_line, started_at, heartbeat_ms) do
+    case RpcClient.receive_message(session, heartbeat_ms, pending_line) do
       {:ok, {:response, _response}, next_pending_line} ->
         emit(on_message, EventMapper.heartbeat(turn_session_id, session.metadata))
-        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line)
+        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line, started_at, heartbeat_ms)
 
       {:ok, {:extension_ui_request, payload}, next_pending_line} ->
         :ok = RpcClient.auto_cancel_extension_request(session, payload)
         emit(on_message, EventMapper.extension_ui_request(payload, Jason.encode!(payload), turn_session_id, session.metadata))
-        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line)
+        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line, started_at, heartbeat_ms)
 
       {:ok, {:event, %{"type" => "agent_end"} = payload}, _next_pending_line} ->
         emit(on_message, EventMapper.rpc_event(payload, Jason.encode!(payload), turn_session_id, session.metadata))
@@ -64,20 +68,31 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
 
       {:ok, {:event, payload}, next_pending_line} ->
         emit(on_message, EventMapper.rpc_event(payload, Jason.encode!(payload), turn_session_id, session.metadata))
-        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line)
+        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line, started_at, heartbeat_ms)
 
       {:ok, {:malformed, raw}, next_pending_line} ->
         emit(on_message, EventMapper.malformed(raw, turn_session_id, session.metadata))
-        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line)
+        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line, started_at, heartbeat_ms)
 
       {:error, :timeout} ->
-        :ok = maybe_abort(session)
-        {:error, :turn_timeout}
+        elapsed = System.monotonic_time(:millisecond) - started_at
+
+        if port_alive?(session) and elapsed < timeout_ms do
+          emit(on_message, EventMapper.heartbeat(turn_session_id, session.metadata))
+          receive_loop(session, turn_session_id, on_message, issue, timeout_ms, pending_line, started_at, heartbeat_ms)
+        else
+          :ok = maybe_abort(session)
+          {:error, :turn_timeout}
+        end
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  @dialyzer {:no_match, port_alive?: 1}
+  defp port_alive?(%{port: port}) when is_port(port), do: :erlang.port_info(port) != :undefined
+  defp port_alive?(_session), do: false
 
   defp maybe_abort(session) do
     case RpcClient.abort(session) do

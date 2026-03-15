@@ -442,6 +442,22 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
          "reviewDecision" => "APPROVED",
          "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
          "mergeCommit" => nil
+       })},
+      # Retry confirmation also returns OPEN (GitHub eventual consistency)
+      {:ok,
+       Jason.encode!(%{
+         "number" => 77,
+         "url" => "https://github.com/acme/widgets/pull/77",
+         "state" => "OPEN",
+         "isDraft" => false,
+         "headRefName" => "feature/merge-pr",
+         "headRefOid" => "abc123",
+         "baseRefName" => "main",
+         "mergeStateStatus" => "CLEAN",
+         "mergeable" => "MERGEABLE",
+         "reviewDecision" => "APPROVED",
+         "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+         "mergeCommit" => nil
        })}
     ])
 

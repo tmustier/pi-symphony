@@ -121,8 +121,10 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   @spec continuation_allowed?(Issue.t(), map()) :: boolean()
   def continuation_allowed?(%Issue{} = issue, settings) when is_map(settings) do
     runtime = issue_runtime(issue, settings)
-    runtime.dispatch_allowed and not runtime.passive_phase
+    runtime.dispatch_allowed and not runtime.passive_phase and not merge_completion_phase?(runtime.phase)
   end
+
+  defp merge_completion_phase?(phase), do: phase == "merging"
 
   @spec tracked_issue(Issue.t(), map()) :: map()
   def tracked_issue(%Issue{} = issue, settings) when is_map(settings) do

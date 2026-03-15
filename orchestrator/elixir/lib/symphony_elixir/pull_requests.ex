@@ -5,6 +5,8 @@ defmodule SymphonyElixir.PullRequests do
 
   alias SymphonyElixir.{Config, Linear.Issue, MapUtils}
 
+  @merge_confirmation_retry_delay_ms 3_000
+
   @type pr_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
   @type pr_state_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
   @type review_comment_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
@@ -179,12 +181,27 @@ defmodule SymphonyElixir.PullRequests do
          {:ok, merged_state} <- inspect_pull_request_state(context, runner) do
       case confirm_merged_state(merged_state, context) do
         :ok -> {:ok, merge_success(merged_state, context)}
-        {:skip, _details} = result -> result
+        {:skip, _details} -> retry_merge_confirmation(context, runner)
         :merge_not_confirmed -> {:error, :merge_not_confirmed}
       end
     else
       {:skip, _details} = result -> result
       {:error, _reason} = result -> result
+    end
+  end
+
+  defp retry_merge_confirmation(context, runner) do
+    Process.sleep(@merge_confirmation_retry_delay_ms)
+
+    case inspect_pull_request_state(context, runner) do
+      {:ok, %{state: "MERGED"} = merged_state} ->
+        {:ok, merge_success(merged_state, context)}
+
+      {:ok, pr_state} ->
+        {:skip, merge_skip(:merge_pending_confirmation, context, "confirm_merge_completion", pr_state)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
