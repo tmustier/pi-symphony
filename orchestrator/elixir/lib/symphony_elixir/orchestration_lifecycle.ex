@@ -30,7 +30,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
         issue,
         %{
           owned: managed_owned?(issue, runtime),
-          phase: Map.get(passive_pr_updates, :phase, runtime.phase),
+          phase: bootstrap_phase(runtime, passive_pr_updates),
           branch: issue.branch_name,
           pr: Map.get(passive_pr_updates, :pr),
           waiting_reason: Map.get(passive_pr_updates, :waiting_reason, runtime.waiting_reason),
@@ -94,6 +94,20 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       {:ok, [%Issue{} = issue | _]} -> {:ok, issue}
       {:ok, []} -> {:ok, :missing}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp bootstrap_phase(runtime, passive_pr_updates) do
+    case Map.get(passive_pr_updates, :phase) do
+      phase when is_binary(phase) ->
+        phase
+
+      _ ->
+        if runtime.phase == "rework" and runtime.waiting_reason == "rework_limit_exceeded" do
+          "blocked"
+        else
+          runtime.phase
+        end
     end
   end
 
@@ -346,8 +360,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp maybe_persist_review_comment(_issue, runtime, pr_result, running_entry, opts, settings) do
     with true <- settings.review.enabled == true,
          true <- review_persistence_phase?(runtime.phase),
-         :ok <- review_passes_remaining?(runtime, settings),
          {:ok, pr_info} <- pr_result,
+         :ok <- review_passes_remaining?(runtime, pr_info, settings),
          {:ok, artifact} <- load_current_review_artifact(running_entry, pr_info) do
       PullRequests.upsert_review_comment(
         %{
@@ -412,10 +426,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp review_update(_runtime, _pr_metadata, _review_result), do: nil
 
   defp persisted_review_pass_count(last_reviewed_head_sha, head_sha, passes_completed) do
-    if last_reviewed_head_sha == head_sha and passes_completed > 0 do
+    same_head = is_binary(head_sha) and last_reviewed_head_sha == head_sha
+    valid_pass_count = is_integer(passes_completed) and passes_completed > 0
+
+    if same_head and valid_pass_count do
       passes_completed
     else
-      passes_completed + 1
+      1
     end
   end
 
@@ -460,14 +477,30 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     |> normalize_map()
   end
 
-  defp review_passes_remaining?(runtime, settings) do
+  defp review_passes_remaining?(runtime, pr_info, settings) do
     max_passes = settings.review.max_passes
-    passes_completed = current_review_metadata(runtime) |> Map.get("passes_completed") || 0
+    current_head_sha = Map.get(pr_info, :head_sha) || Map.get(pr_info, "head_sha")
+
+    passes_completed =
+      runtime
+      |> current_review_metadata()
+      |> current_head_review_pass_count(current_head_sha)
 
     if is_integer(max_passes) and is_integer(passes_completed) and passes_completed >= max_passes do
       {:skip, %{reason: :max_review_passes_reached, passes_completed: passes_completed, max_passes: max_passes}}
     else
       :ok
+    end
+  end
+
+  defp current_head_review_pass_count(review_metadata, current_head_sha) do
+    last_reviewed_head_sha = Map.get(review_metadata, "last_reviewed_head_sha")
+    passes_completed = Map.get(review_metadata, "passes_completed")
+
+    if is_binary(current_head_sha) and current_head_sha == last_reviewed_head_sha and is_integer(passes_completed) do
+      passes_completed
+    else
+      0
     end
   end
 

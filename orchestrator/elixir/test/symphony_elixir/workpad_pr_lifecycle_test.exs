@@ -3392,6 +3392,159 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
+  test "post-run lifecycle allows a new PR head to use a fresh review pass budget" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-review-new-head-pass-budget-#{System.unique_integer([:positive])}")
+    origin_repo = Path.join(test_root, "origin.git")
+    repo = Path.join(test_root, "repo")
+    review_path = ReviewArtifact.path_for_test(repo)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+    previous_workflow = File.read!(Workflow.workflow_file_path())
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_required_labels: [],
+      pr_review_comment_mode: "upsert",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_max_passes: 2
+    )
+
+    issue = %Issue{
+      id: "issue-review-new-head",
+      identifier: "MT-MAX2",
+      state: "In Review",
+      title: "Fresh head gets a fresh review budget",
+      description: "Should allow another review pass after a new commit lands",
+      url: "https://example.org/issues/MT-MAX2",
+      branch_name: "feature/review-new-head",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-review-new-head",
+          body: """
+          ## Symphony Workpad
+
+          ```yaml
+          symphony:
+            schema_version: 1
+            owned: true
+            phase: reviewing
+            rework_cycles: 0
+            branch: feature/review-new-head
+            pr:
+              number: 100
+              url: https://github.com/acme/widgets/pull/100
+              head_sha: oldhead1
+            review:
+              comment_id: 555
+              passes_completed: 2
+              last_reviewed_head_sha: oldhead1
+              last_fixed_head_sha: null
+            merge:
+              last_attempted_head_sha: null
+          ```
+          """,
+          updated_at: "2026-03-14T00:00:00Z"
+        }
+      ]
+    }
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["init", "--bare", origin_repo])
+      System.cmd("git", ["init", "-b", "feature/review-new-head", repo])
+      System.cmd("git", ["-C", repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repo, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, "README.md"), "# review new head\n")
+      System.cmd("git", ["-C", repo, "add", "README.md"])
+      System.cmd("git", ["-C", repo, "commit", "-m", "initial"])
+      System.cmd("git", ["-C", repo, "remote", "add", "origin", origin_repo])
+      System.cmd("git", ["-C", repo, "push", "-u", "origin", "feature/review-new-head"])
+      {head_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+      trimmed_head_sha = String.trim(head_sha)
+      File.mkdir_p!(Path.dirname(review_path))
+      File.write!(review_path, "<!-- symphony-review-head: #{trimmed_head_sha} -->\n\n### Findings\n\n- Fresh commit needs another pass.")
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 100,
+             "url" => "https://github.com/acme/widgets/pull/100",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/review-new-head",
+             "headRefOid" => trimmed_head_sha,
+             "baseRefName" => "main"
+           }
+         ])},
+        {:ok,
+         Jason.encode!(%{
+           "id" => 555,
+           "body" => "<!-- symphony-review -->\n\nOld review",
+           "html_url" => "https://github.com/acme/widgets/pull/100#issuecomment-555"
+         })},
+        {:ok,
+         Jason.encode!(%{
+           "id" => 555,
+           "body" => "<!-- symphony-review -->\n\n### Findings\n\n- Fresh commit needs another pass.",
+           "html_url" => "https://github.com/acme/widgets/pull/100#issuecomment-555"
+         })}
+      ])
+
+      runner = fn command, args, _opts ->
+        send(self(), {:github_command, command, args})
+
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      issue_fetcher = fn ["issue-review-new-head"] -> {:ok, [issue]} end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.reconcile_after_run_for_test(
+                 "issue-review-new-head",
+                 %{workspace_path: repo, worker_host: nil},
+                 runner: runner,
+                 issue_fetcher: issue_fetcher,
+                 repo_slug: "acme/widgets",
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.workpad.metadata["review"]["comment_id"] == 555
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 1
+      assert runtime.workpad.metadata["review"]["last_reviewed_head_sha"] == trimmed_head_sha
+      assert_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/comments/555", "--method", "PATCH" | _]}
+    after
+      File.rm_rf(test_root)
+      File.write!(Workflow.workflow_file_path(), previous_workflow)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "post-run lifecycle blocks rework phase when max rework cycles are exceeded" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
@@ -3465,6 +3618,72 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
       assert runtime.phase == "blocked"
       assert runtime.waiting_reason == "rework_limit_exceeded"
+    after
+      File.write!(Workflow.workflow_file_path(), previous_workflow)
+
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "bootstrap lifecycle blocks rework issues that already exhausted the rework cap" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+    previous_workflow = File.read!(Workflow.workflow_file_path())
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: false,
+      orchestration_max_rework_cycles: 2
+    )
+
+    issue = %Issue{
+      id: "issue-bootstrap-rework-limit",
+      identifier: "MT-RW2",
+      state: "Rework",
+      title: "Bootstrap rework limit test",
+      description: "Should not dispatch another run once the cap is reached",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-bootstrap-rework-limit",
+          body: """
+          ## Symphony Workpad
+
+          ```yaml
+          symphony:
+            phase: rework
+            rework_cycles: 2
+          ```
+          """,
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: fn _command, _args, _opts -> {:error, :should_not_be_called} end,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      assert runtime.phase == "blocked"
+      assert runtime.waiting_reason == "rework_limit_exceeded"
+      assert runtime.dispatch_allowed == false
     after
       File.write!(Workflow.workflow_file_path(), previous_workflow)
 

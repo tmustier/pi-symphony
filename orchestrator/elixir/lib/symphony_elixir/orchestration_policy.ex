@@ -87,7 +87,9 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     ownership = ownership_state(issue, settings, workpad)
     kill_switch = kill_switch_state(issue, settings)
     passive_phase = workpad.phase in settings.orchestration.passive_phases
-    base_dispatch_allowed = ownership.allowed and not kill_switch.active
+    rework_limit_active = rework_limit_active?(workpad, settings)
+    blocking_reason = policy_blocking_reason(ownership, kill_switch, rework_limit_active)
+    base_dispatch_allowed = is_nil(blocking_reason)
     dispatch_allowed = base_dispatch_allowed and not passive_phase
 
     %{
@@ -98,7 +100,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
       dispatch_allowed: dispatch_allowed,
       waiting_reason:
         workpad.waiting_reason ||
-          default_waiting_reason(passive_phase, settings.rollout.mode, ownership, kill_switch),
+          default_waiting_reason(passive_phase, settings.rollout.mode, blocking_reason),
       next_intended_action:
         preferred_next_intended_action(
           workpad.observation,
@@ -107,8 +109,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
           base_dispatch_allowed,
           dispatch_allowed,
           settings.rollout.mode,
-          ownership,
-          kill_switch
+          blocking_reason
         ),
       ownership: ownership,
       kill_switch: kill_switch,
@@ -263,6 +264,28 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     }
   end
 
+  defp rework_limit_active?(%{phase: "rework", metadata: metadata}, settings) do
+    max_rework_cycles = settings.orchestration.max_rework_cycles
+
+    rework_cycles =
+      metadata
+      |> normalize_map()
+      |> Map.get("rework_cycles")
+
+    is_integer(max_rework_cycles) and is_integer(rework_cycles) and rework_cycles >= max_rework_cycles
+  end
+
+  defp rework_limit_active?(_workpad, _settings), do: false
+
+  defp policy_blocking_reason(ownership, kill_switch, rework_limit_active) do
+    cond do
+      not ownership.allowed -> :ownership
+      kill_switch.active -> :kill_switch
+      rework_limit_active -> :rework_limit
+      true -> nil
+    end
+  end
+
   defp label_present?(_issue, nil), do: true
 
   defp label_present?(%Issue{labels: labels}, required_label) when is_list(labels) do
@@ -363,15 +386,14 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     end
   end
 
-  defp preferred_next_intended_action(observation, phase, passive_phase, base_dispatch_allowed, dispatch_allowed, rollout_mode, ownership, kill_switch) do
+  defp preferred_next_intended_action(observation, phase, passive_phase, base_dispatch_allowed, dispatch_allowed, rollout_mode, blocking_reason) do
     computed =
       next_intended_action(
         passive_phase,
         base_dispatch_allowed,
         dispatch_allowed,
         rollout_mode,
-        ownership,
-        kill_switch
+        blocking_reason
       )
 
     if base_dispatch_allowed and (passive_phase or phase == "merging") do
@@ -381,26 +403,22 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     end
   end
 
-  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, ownership, kill_switch) do
-    cond do
-      not ownership.allowed -> "await_ownership"
-      kill_switch.active -> "automation_paused"
-      true -> "idle"
-    end
-  end
+  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, :ownership), do: "await_ownership"
+  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, :kill_switch), do: "automation_paused"
+  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, :rework_limit), do: "operator_intervention_required"
+  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, _blocking_reason), do: "idle"
 
-  defp next_intended_action(true, true, false, _rollout_mode, _ownership, _kill_switch), do: "poll_on_next_cycle"
-  defp next_intended_action(false, true, true, "observe", _ownership, _kill_switch), do: "observe_only"
-  defp next_intended_action(false, true, true, _rollout_mode, _ownership, _kill_switch), do: "dispatch_worker"
+  defp next_intended_action(true, true, false, _rollout_mode, _blocking_reason), do: "poll_on_next_cycle"
+  defp next_intended_action(false, true, true, "observe", _blocking_reason), do: "observe_only"
+  defp next_intended_action(false, true, true, _rollout_mode, _blocking_reason), do: "dispatch_worker"
 
-  defp default_waiting_reason(_passive_phase, _rollout_mode, _ownership, %{active: true}),
-    do: "kill_switch_active"
-
-  defp default_waiting_reason(_passive_phase, _rollout_mode, %{allowed: false}, _kill_switch), do: nil
-  defp default_waiting_reason(true, "observe", _ownership, _kill_switch), do: "observe_only"
-  defp default_waiting_reason(true, _rollout_mode, _ownership, _kill_switch), do: nil
-  defp default_waiting_reason(false, "observe", _ownership, _kill_switch), do: "observe_only"
-  defp default_waiting_reason(_passive_phase, _rollout_mode, _ownership, _kill_switch), do: nil
+  defp default_waiting_reason(_passive_phase, _rollout_mode, :kill_switch), do: "kill_switch_active"
+  defp default_waiting_reason(_passive_phase, _rollout_mode, :ownership), do: nil
+  defp default_waiting_reason(_passive_phase, _rollout_mode, :rework_limit), do: "rework_limit_exceeded"
+  defp default_waiting_reason(true, "observe", _blocking_reason), do: "observe_only"
+  defp default_waiting_reason(true, _rollout_mode, _blocking_reason), do: nil
+  defp default_waiting_reason(false, "observe", _blocking_reason), do: "observe_only"
+  defp default_waiting_reason(_passive_phase, _rollout_mode, _blocking_reason), do: nil
 
   defp fetch_value(map, key) when is_map(map) and is_atom(key) do
     case Map.fetch(map, key) do

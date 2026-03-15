@@ -647,6 +647,39 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "rework issue at the max rework cycle cap is not dispatch-eligible" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      orchestration_max_rework_cycles: 2
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "rework-limit-1",
+      identifier: "MT-1009",
+      title: "Too many rework loops",
+      state: "Rework",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: rework\n  rework_cycles: 2\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
   test "todo issue with terminal blockers remains dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
