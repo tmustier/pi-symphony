@@ -23,6 +23,9 @@ defmodule SymphonyElixir.Application do
   def start(_type, _args) do
     :ok = SymphonyElixir.LogFile.configure()
 
+    # :rest_for_one — if the Orchestrator crashes, restart the HttpServer and
+    # StatusDashboard so they don't serve stale state.  PubSub, TaskSupervisor,
+    # and WorkflowStore are independent infrastructure that survives restarts.
     children = [
       {Phoenix.PubSub, name: SymphonyElixir.PubSub},
       {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
@@ -34,7 +37,7 @@ defmodule SymphonyElixir.Application do
 
     Supervisor.start_link(
       children,
-      strategy: :one_for_one,
+      strategy: :rest_for_one,
       name: SymphonyElixir.Supervisor
     )
   end

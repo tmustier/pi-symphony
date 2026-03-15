@@ -1,30 +1,28 @@
-# Symphony Elixir
+# Orchestrator (Elixir)
 
-This directory contains the current Elixir/OTP implementation of Symphony, based on
-[`SPEC.md`](../SPEC.md) at the repository root.
+> **Adapted from [OpenAI Symphony](https://github.com/openai/symphony)** — see
+> [`THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md) for provenance and
+> [`docs/archive/`](../../docs/archive/) for the original migration map.
 
-> [!WARNING]
-> Symphony Elixir is prototype software intended for evaluation only and is presented as-is.
-> We recommend implementing your own hardened version based on `SPEC.md`.
-
-## Screenshot
-
-![Symphony Elixir screenshot](../.github/media/elixir-screenshot.png)
+This directory contains the Elixir/OTP orchestrator that polls Linear, manages
+workspaces, and dispatches Pi coding workers. The Codex app-server runtime has
+been replaced with Pi RPC workers — see
+[`docs/PI_RPC_CONTRACT.md`](../../docs/PI_RPC_CONTRACT.md) for the worker
+contract and [`docs/PLAN.md`](../../docs/PLAN.md) for the overall architecture.
 
 ## How it works
 
 1. Polls Linear for candidate work
-2. Creates a workspace per issue
-3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
-   workspace
-4. Sends a workflow prompt to Codex
-5. Keeps Codex working on the issue until the work is done
+2. Creates an isolated workspace per issue
+3. Launches a Pi worker in RPC mode inside the workspace
+4. Sends a workflow prompt rendered from `WORKFLOW.md` + issue data
+5. Keeps the worker running until the issue is complete, blocked, or timed out
+6. Captures proof artifacts and surfaces status through a dashboard and JSON API
 
-During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
-skills can make raw Linear GraphQL calls.
-
-If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
-Symphony stops the active agent for that issue and cleans up matching workspaces.
+Pi workers run with explicit extensions for workspace safety (`workspace-guard`),
+proof capture (`proof`), and tracker mutations (`linear-graphql`). The
+orchestrator manages PR lifecycle, self-review, merge execution, and tracker
+reconciliation through the `OrchestrationLifecycle` module.
 
 ## How to use it
 
