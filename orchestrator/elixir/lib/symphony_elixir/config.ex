@@ -27,7 +27,7 @@ defmodule SymphonyElixir.Config do
 
   After implementing and validating, run a self-review:
   1. Get the current HEAD SHA with `git rev-parse HEAD`.
-  2. Generate the diff with `git diff origin/main...HEAD`.
+  2. Generate the diff with `git diff origin/{{ policy.pr.base_branch }}...HEAD`.
   3. Run the `pr-reviewer` subagent with the diff to review your changes.
   4. Write the review output to `.symphony/review.md` with a leading `<!-- symphony-review-head: <SHA> -->` line.
   5. If the review surfaces P0 or P1 findings you agree with, fix them and re-review once.

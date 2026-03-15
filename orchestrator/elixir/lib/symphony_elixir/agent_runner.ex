@@ -111,6 +111,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp run_worker_turns(workspace, issue, worker_update_recipient, opts, worker_host) do
     execution_context = %{
       workspace: workspace,
+      worker_host: worker_host,
       worker_update_recipient: worker_update_recipient,
       opts: opts,
       issue_state_fetcher: Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1),
@@ -156,7 +157,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     case continue_with_issue?(issue, execution_context.issue_state_fetcher) do
       {:continue, refreshed_issue} when turn_number < max_turns ->
-        if workspace_work_completed?(execution_context.workspace) do
+        if workspace_work_completed?(execution_context.workspace, execution_context.worker_host) do
           Logger.info("Worker completed implementation (branch pushed to remote); stopping agent turns for #{issue_context(refreshed_issue)} turn=#{turn_number}/#{max_turns}")
 
           :ok
@@ -185,8 +186,8 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp workspace_work_completed?(workspace) do
-    case WorkspaceGit.inspect_workspace(workspace) do
+  defp workspace_work_completed?(workspace, worker_host) do
+    case WorkspaceGit.inspect_workspace(workspace, worker_host) do
       {:ok, %{remote_branch_published: true}} ->
         review_enabled = Config.settings!().review.enabled == true
         not review_enabled or ReviewArtifact.exists?(workspace)
