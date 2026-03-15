@@ -4,31 +4,23 @@ Symphony-style unattended issue orchestration for Pi.
 
 ## Status
 
-Bootstrap / scaffolding phase.
+Functional — the core orchestration loop, PR automation, and merge execution are implemented. Not yet running in production.
 
-## Current direction
+## What it does
 
-We are starting from the architecture and implementation shape of OpenAI's Symphony, but adapting it for Pi:
+- Polls a Linear board for eligible issues
+- Creates an isolated workspace per issue
+- Launches a Pi coding worker in RPC mode
+- Lets the worker implement autonomously within repo-defined policy
+- Manages the full PR lifecycle: create/reuse PRs, self-review, merge execution
+- Captures proof-of-work artifacts and surfaces status through a dashboard and JSON API
+- Retries, reconciles, and recovers safely
 
-- keep a long-running orchestrator service
-- keep repo-owned `WORKFLOW.md` configuration and prompt policy
-- make orchestration policy explicit in workflow config (`orchestration`, `rollout`, `pr`, `review`, `merge`) and expose it to worker prompts
-- keep a durable machine-readable Symphony workpad comment on tracker issues for phase / branch / PR / review recovery
-- keep per-issue isolated workspaces
-- replace Codex app-server workers with Pi workers running over Pi RPC
-- add Pi extensions inside worker sessions for workspace safety, tracker operations, and proof-of-work capture
-- persist self-review artifacts from the workspace into a single durable PR review comment with head-keyed review metadata
+## Architecture
 
-## Why this repo exists
-
-The goal is to let a team manage work, not babysit individual coding sessions:
-
-- poll an issue tracker for eligible work
-- create or reuse an isolated workspace per issue
-- run a Pi coding session inside that workspace
-- validate the result
-- publish artifacts and proof of work
-- retry, reconcile, and recover safely
+- **Orchestrator** (Elixir/OTP) — long-running daemon adapted from [OpenAI Symphony](https://github.com/openai/symphony)
+- **Worker extensions** (TypeScript) — `workspace-guard`, `proof`, `linear-graphql`
+- **Workflow contract** — repo-owned `WORKFLOW.md` with policy-driven prompt templates
 
 ## Development quick start
 
@@ -43,19 +35,21 @@ See [`docs/DEV.md`](docs/DEV.md) for the full developer workflow.
 
 ```text
 pi-symphony/
-  orchestrator/elixir/  # vendored Symphony Elixir baseline, to be adapted
+  orchestrator/elixir/  # Elixir/OTP orchestrator (adapted from OpenAI Symphony)
   extensions/           # Pi worker extensions
   examples/             # fixtures and sample workflows
-  docs/                 # plan, developer docs, upstream notes
+  docs/                 # architecture, developer docs, contracts
+  docs/archive/         # historical migration notes
 ```
 
 ## Docs
 
 - [`docs/PLAN.md`](docs/PLAN.md) — implementation plan and architecture
 - [`docs/DEV.md`](docs/DEV.md) — local development workflow and quality bar
-- [`docs/UPSTREAM.md`](docs/UPSTREAM.md) — upstream import and adaptation notes
-- [`docs/MODULE_MAP.md`](docs/MODULE_MAP.md) — keep / adapt / replace migration map
-- [`docs/PI_RPC_CONTRACT.md`](docs/PI_RPC_CONTRACT.md) — v1 Pi worker runtime contract
+- [`docs/PI_RPC_CONTRACT.md`](docs/PI_RPC_CONTRACT.md) — Pi worker runtime contract
+- [`docs/ORCHESTRATED_PR_FLOW.md`](docs/ORCHESTRATED_PR_FLOW.md) — PR automation design
+- [`docs/PR_AUTOMATION_SCHEMA_PROPOSAL.md`](docs/PR_AUTOMATION_SCHEMA_PROPOSAL.md) — config and runtime contract for PR automation
+- [`docs/WORKFLOW_PR_AUTOMATION_DRAFT.md`](docs/WORKFLOW_PR_AUTOMATION_DRAFT.md) — booking-demo workflow draft
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — vendored code attribution
 
 ## License

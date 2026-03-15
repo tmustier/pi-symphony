@@ -1,5 +1,7 @@
 # Pi RPC worker contract
 
+Status: **Implemented** — this contract is live in the current orchestrator.
+
 This document defines the **v1 worker contract** between the long-running orchestrator and a Pi worker process.
 
 The goal is to replace Symphony's Codex app-server boundary with the smallest Pi-native equivalent that still gives us:
