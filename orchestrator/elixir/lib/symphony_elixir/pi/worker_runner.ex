@@ -41,6 +41,7 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
   defp receive_loop(session, turn_session_id, on_message, issue, timeout_ms, pending_line) do
     case RpcClient.receive_message(session, timeout_ms, pending_line) do
       {:ok, {:response, _response}, next_pending_line} ->
+        emit(on_message, EventMapper.heartbeat(turn_session_id, session.metadata))
         receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line)
 
       {:ok, {:extension_ui_request, payload}, next_pending_line} ->
