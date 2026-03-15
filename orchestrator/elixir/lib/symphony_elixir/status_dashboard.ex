@@ -742,16 +742,28 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp active_tracked_entries(tracked, running, retrying) do
-    active_issue_keys =
-      running
-      |> Enum.map(&tracked_issue_key/1)
-      |> Kernel.++(Enum.map(retrying, &tracked_issue_key/1))
-      |> MapSet.new()
+    active_keys = build_active_key_set(running, retrying)
+    non_passive = Enum.reject(tracked, &passive_entry?/1)
 
-    tracked
-    |> Enum.reject(&(Map.get(&1, :passive_phase, false) == true))
-    |> Enum.reject(&(MapSet.member?(active_issue_keys, tracked_issue_key(&1)) and tracked_issue_key(&1) != nil))
-    |> Enum.sort_by(&{Map.get(&1, :issue_identifier) || "", Map.get(&1, :issue_id) || ""})
+    non_passive
+    |> Enum.reject(&entry_in_active_set?(&1, active_keys))
+    |> Enum.sort_by(&tracked_sort_key/1)
+  end
+
+  defp build_active_key_set(running, retrying) do
+    keys = Enum.map(running, &tracked_issue_key/1) ++ Enum.map(retrying, &tracked_issue_key/1)
+    MapSet.new(keys)
+  end
+
+  defp passive_entry?(entry), do: Map.get(entry, :passive_phase, false) == true
+
+  defp entry_in_active_set?(entry, active_keys) do
+    key = tracked_issue_key(entry)
+    key != nil and MapSet.member?(active_keys, key)
+  end
+
+  defp tracked_sort_key(entry) do
+    {Map.get(entry, :issue_identifier) || "", Map.get(entry, :issue_id) || ""}
   end
 
   defp passive_tracked_entries(tracked, running, retrying) do

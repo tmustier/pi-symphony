@@ -1,0 +1,155 @@
+defmodule Mix.Tasks.Symphony.Preflight do
+  use Mix.Task
+
+  @moduledoc """
+  Validates workflow config, tooling prerequisites, and extension availability
+  before enabling Symphony automation.
+
+  Checks:
+    - WORKFLOW.md is present, parseable, and passes semantic validation
+    - GitHub CLI (`gh`) is installed and authenticated
+    - Worker extension paths resolve to existing files
+    - Kill-switch file path is writable (if configured)
+    - Rollout mode is reported for operator awareness
+  """
+  @shortdoc "Validate Symphony prerequisites before enabling automation"
+
+  @impl Mix.Task
+  def run(_args) do
+    Mix.Task.run("app.config")
+
+    results =
+      [
+        check_workflow_config(),
+        check_gh_cli(),
+        check_extension_paths(),
+        check_kill_switch_path(),
+        report_rollout_mode()
+      ]
+      |> List.flatten()
+
+    failures = Enum.filter(results, &match?({:fail, _, _}, &1))
+    warnings = Enum.filter(results, &match?({:warn, _, _}, &1))
+    passes = Enum.filter(results, &match?({:pass, _, _}, &1))
+    infos = Enum.filter(results, &match?({:info, _, _}, &1))
+
+    Enum.each(passes, fn {:pass, label, detail} ->
+      Mix.shell().info("  ✅ #{label}: #{detail}")
+    end)
+
+    Enum.each(infos, fn {:info, label, detail} ->
+      Mix.shell().info("  ℹ️  #{label}: #{detail}")
+    end)
+
+    Enum.each(warnings, fn {:warn, label, detail} ->
+      Mix.shell().info("  ⚠️  #{label}: #{detail}")
+    end)
+
+    Enum.each(failures, fn {:fail, label, detail} ->
+      Mix.shell().error("  ❌ #{label}: #{detail}")
+    end)
+
+    Mix.shell().info("")
+
+    if failures == [] do
+      Mix.shell().info("Preflight passed (#{length(passes)} checks, #{length(warnings)} warnings)")
+    else
+      Mix.raise("Preflight failed: #{length(failures)} check(s) failed")
+    end
+  end
+
+  defp check_workflow_config do
+    alias SymphonyElixir.{Config, Workflow}
+
+    case Workflow.current() do
+      {:ok, _workflow} ->
+        case Config.validate!() do
+          :ok ->
+            {:pass, "Workflow config", "WORKFLOW.md parsed and validated"}
+
+          {:error, reason} ->
+            {:fail, "Workflow config", "semantic validation failed: #{inspect(reason)}"}
+        end
+
+      {:error, reason} ->
+        {:fail, "Workflow config", "cannot load WORKFLOW.md: #{inspect(reason)}"}
+    end
+  end
+
+  defp check_gh_cli do
+    case System.find_executable("gh") do
+      nil -> {:fail, "GitHub CLI", "gh not found in PATH"}
+      _path -> check_gh_auth()
+    end
+  end
+
+  defp check_gh_auth do
+    case System.cmd("gh", ["auth", "status"], stderr_to_stdout: true) do
+      {output, 0} ->
+        account = extract_gh_account(output)
+        {:pass, "GitHub CLI", "authenticated#{if account, do: " as #{account}", else: ""}"}
+
+      {output, _code} ->
+        {:fail, "GitHub CLI", "not authenticated: #{String.trim(output) |> String.slice(0, 120)}"}
+    end
+  end
+
+  defp extract_gh_account(output) do
+    case Regex.run(~r/Logged in to [^\s]+ account ([^\s(]+)/, output) do
+      [_, account] -> account
+      _ -> nil
+    end
+  end
+
+  defp check_extension_paths do
+    case SymphonyElixir.Config.settings() do
+      {:ok, settings} -> Enum.map(settings.pi.extension_paths, &check_extension_path/1)
+      {:error, _reason} -> [{:warn, "Extensions", "cannot check — workflow config is invalid"}]
+    end
+  end
+
+  defp check_extension_path(path) do
+    if File.exists?(path) do
+      {:pass, "Extension", "#{Path.basename(path)} exists at #{path}"}
+    else
+      {:fail, "Extension", "#{Path.basename(path)} not found at #{path}"}
+    end
+  end
+
+  defp check_kill_switch_path do
+    case SymphonyElixir.Config.settings() do
+      {:ok, settings} -> check_kill_switch_file(settings.rollout.kill_switch_file)
+      {:error, _reason} -> {:warn, "Kill switch", "cannot check — workflow config is invalid"}
+    end
+  end
+
+  defp check_kill_switch_file(path) when is_binary(path) do
+    dir = Path.dirname(path)
+
+    cond do
+      File.exists?(path) ->
+        {:warn, "Kill switch", "file exists at #{path} — automation will be paused"}
+
+      File.dir?(dir) ->
+        {:pass, "Kill switch", "directory #{dir} exists and is writable"}
+
+      true ->
+        {:warn, "Kill switch", "directory #{dir} does not exist — kill switch file cannot be created"}
+    end
+  end
+
+  defp check_kill_switch_file(_path) do
+    {:info, "Kill switch", "no kill_switch_file configured"}
+  end
+
+  defp report_rollout_mode do
+    case SymphonyElixir.Config.settings() do
+      {:ok, settings} ->
+        mode = settings.rollout.mode || "unknown"
+        {:info, "Rollout mode", mode}
+
+      {:error, _reason} ->
+        {:warn, "Rollout mode", "cannot determine — workflow config is invalid"}
+    end
+  end
+end

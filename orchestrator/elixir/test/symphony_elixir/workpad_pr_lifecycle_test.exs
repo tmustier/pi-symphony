@@ -3258,6 +3258,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     review_path = ReviewArtifact.path_for_test(repo)
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+    previous_workflow = File.read!(Workflow.workflow_file_path())
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -3379,6 +3380,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       refute_receive {:github_command, "gh", ["api", "repos/acme/widgets/issues/99/comments" | _]}
     after
       File.rm_rf(test_root)
+      File.write!(Workflow.workflow_file_path(), previous_workflow)
 
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
@@ -3393,6 +3395,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
   test "post-run lifecycle blocks rework phase when max rework cycles are exceeded" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+    previous_workflow = File.read!(Workflow.workflow_file_path())
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -3463,6 +3466,8 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert runtime.phase == "blocked"
       assert runtime.waiting_reason == "rework_limit_exceeded"
     after
+      File.write!(Workflow.workflow_file_path(), previous_workflow)
+
       if is_nil(previous_memory_issues),
         do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
         else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
