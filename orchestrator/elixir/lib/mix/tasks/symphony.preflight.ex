@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Symphony.Preflight do
 
   Checks:
     - WORKFLOW.md is present, parseable, and passes semantic validation
-    - GitHub CLI (`gh`) is installed and authenticated
+    - GitHub CLI (`gh`) is installed and authenticated when the workflow requires GitHub automation
     - Worker extension paths resolve to existing files
     - Kill-switch file path is writable (if configured)
     - Rollout mode is reported for operator awareness
@@ -77,9 +77,20 @@ defmodule Mix.Tasks.Symphony.Preflight do
   end
 
   defp check_gh_cli do
-    case System.find_executable("gh") do
-      nil -> {:fail, "GitHub CLI", "gh not found in PATH"}
-      _path -> check_gh_auth()
+    case SymphonyElixir.Config.settings() do
+      {:ok, settings} -> check_gh_cli(settings)
+      {:error, _reason} -> {:warn, "GitHub CLI", "cannot determine requirement — workflow config is invalid"}
+    end
+  end
+
+  defp check_gh_cli(settings) do
+    if github_cli_required?(settings) do
+      case System.find_executable("gh") do
+        nil -> {:fail, "GitHub CLI", "gh not found in PATH"}
+        _path -> check_gh_auth()
+      end
+    else
+      {:info, "GitHub CLI", "not required for current workflow"}
     end
   end
 
@@ -91,6 +102,20 @@ defmodule Mix.Tasks.Symphony.Preflight do
 
       {output, _code} ->
         {:fail, "GitHub CLI", "not authenticated: #{String.trim(output) |> String.slice(0, 120)}"}
+    end
+  end
+
+  defp github_cli_required?(settings) do
+    repo_slug_available?() or
+      settings.pr.auto_create == true or
+      (settings.review.enabled == true and settings.pr.review_comment_mode != "off") or
+      settings.merge.mode == "auto"
+  end
+
+  defp repo_slug_available? do
+    case SymphonyElixir.WorkspaceGit.inspect_workspace(File.cwd!()) do
+      {:ok, %{repo_slug: repo_slug}} -> is_binary(repo_slug)
+      _ -> false
     end
   end
 
