@@ -5,6 +5,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   """
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.MapUtils
 
   @phase_values [
     "implementing",
@@ -420,51 +421,20 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   defp default_waiting_reason(false, "observe", _blocking_reason), do: "observe_only"
   defp default_waiting_reason(_passive_phase, _rollout_mode, _blocking_reason), do: nil
 
-  defp fetch_value(map, key) when is_map(map) and is_atom(key) do
-    case Map.fetch(map, key) do
-      {:ok, value} -> value
-      :error -> Map.get(map, Atom.to_string(key))
-    end
-  end
-
-  defp fetch_value(_map, _key), do: nil
+  defp fetch_value(map, key), do: MapUtils.fetch_value(map, key)
 
   defp comment_field(comment, field) when is_map(comment) and is_atom(field) do
-    Map.get(comment, field) || Map.get(comment, Atom.to_string(field))
+    MapUtils.fetch_value(comment, field)
   end
 
-  defp normalize_map(nil), do: %{}
-
-  defp normalize_map(value) when is_map(value) do
-    Enum.reduce(value, %{}, fn {key, nested_value}, acc ->
-      Map.put(acc, normalize_key(key), normalize_map_value(nested_value))
-    end)
-  end
-
-  defp normalize_map(_value), do: %{}
-
-  defp normalize_map_value(value) when is_map(value), do: normalize_map(value)
-  defp normalize_map_value(value) when is_list(value), do: Enum.map(value, &normalize_map_value/1)
-  defp normalize_map_value(value), do: value
-
-  defp normalize_key(value) when is_atom(value), do: Atom.to_string(value)
-  defp normalize_key(value), do: to_string(value)
+  defp normalize_map(value), do: MapUtils.normalize_map(value)
 
   defp normalize_label(value) do
-    value
-    |> normalize_optional_string()
-    |> case do
+    case MapUtils.normalize_optional_string(value) do
       nil -> nil
       normalized -> String.downcase(normalized)
     end
   end
 
-  defp normalize_optional_string(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      normalized -> normalized
-    end
-  end
-
-  defp normalize_optional_string(_value), do: nil
+  defp normalize_optional_string(value), do: MapUtils.normalize_optional_string(value)
 end

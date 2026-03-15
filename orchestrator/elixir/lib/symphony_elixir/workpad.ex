@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Workpad do
   Canonical Symphony workpad comment read/write helpers.
   """
 
-  alias SymphonyElixir.{Config, OrchestrationPolicy, Tracker}
+  alias SymphonyElixir.{Config, MapUtils, OrchestrationPolicy, Tracker}
   alias SymphonyElixir.Linear.Issue
 
   @schema_version 1
@@ -591,8 +591,6 @@ defmodule SymphonyElixir.Workpad do
     end
   end
 
-  defp fetch_nested_string(_map, _path), do: nil
-
   defp fetch_nested_integer(map, [key | rest]) when is_map(map) do
     value = Map.get(map, key)
 
@@ -601,8 +599,6 @@ defmodule SymphonyElixir.Workpad do
       _ -> fetch_nested_integer(normalize_map(value), rest)
     end
   end
-
-  defp fetch_nested_integer(_map, _path), do: nil
 
   defp update_string(updates, key) when is_map(updates), do: normalize_optional_string(Map.get(updates, key))
 
@@ -613,40 +609,16 @@ defmodule SymphonyElixir.Workpad do
   defp passive_phase?(_phase), do: false
 
   defp normalize_map(nil), do: %{}
-
-  defp normalize_map(value) when is_map(value) do
-    Enum.reduce(value, %{}, fn {key, nested_value}, acc ->
-      Map.put(acc, normalize_key(key), normalize_map_value(nested_value))
-    end)
-  end
-
+  defp normalize_map(value) when is_map(value), do: MapUtils.normalize_map(value)
   defp normalize_map(_value), do: %{}
 
-  defp normalize_map_value(value) when is_map(value), do: normalize_map(value)
-  defp normalize_map_value(value) when is_list(value), do: Enum.map(value, &normalize_map_value/1)
-  defp normalize_map_value(value), do: value
+  defp normalize_optional_string(value), do: MapUtils.normalize_optional_string(value)
 
-  defp normalize_key(value) when is_atom(value), do: Atom.to_string(value)
-  defp normalize_key(value), do: to_string(value)
+  defp comment_id(comment), do: MapUtils.fetch_value(comment, :id)
+  defp comment_body(comment), do: MapUtils.fetch_value(comment, :body) || ""
+  defp comment_updated_at(comment), do: MapUtils.fetch_value(comment, :updated_at)
 
-  defp normalize_optional_string(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      normalized -> normalized
-    end
-  end
-
-  defp normalize_optional_string(_value), do: nil
-
-  defp comment_id(comment), do: fetch_value(comment, :id)
-  defp comment_body(comment), do: fetch_value(comment, :body) || ""
-  defp comment_updated_at(comment), do: fetch_value(comment, :updated_at)
-
-  defp fetch_value(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp fetch_value(_map, _key), do: nil
+  defp fetch_value(map, key), do: MapUtils.fetch_value(map, key)
 
   defp normalize_comment_timestamp(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
 

@@ -5,8 +5,15 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   require Logger
 
-  alias SymphonyElixir.{Config, OrchestrationPolicy, PullRequests, ReviewArtifact, Tracker, Workpad, WorkspaceGit}
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.MapUtils
+  alias SymphonyElixir.OrchestrationPolicy
+  alias SymphonyElixir.PullRequests
+  alias SymphonyElixir.ReviewArtifact
+  alias SymphonyElixir.Tracker
+  alias SymphonyElixir.Workpad
+  alias SymphonyElixir.WorkspaceGit
 
   @type reconcile_result :: {:ok, Issue.t()} | {:ok, :missing} | {:error, term()}
 
@@ -1140,25 +1147,10 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
-  defp fetch_value(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp fetch_value(_map, _key), do: nil
+  defp fetch_value(map, key), do: MapUtils.fetch_value(map, key)
 
   defp normalize_map(%{} = map), do: map
   defp normalize_map(_value), do: %{}
 
-  defp pick_string(values) when is_list(values) do
-    Enum.find_value(values, fn
-      value when is_binary(value) ->
-        case String.trim(value) do
-          "" -> nil
-          normalized -> normalized
-        end
-
-      _ ->
-        nil
-    end)
-  end
+  defp pick_string(values), do: MapUtils.pick_string(values)
 end
