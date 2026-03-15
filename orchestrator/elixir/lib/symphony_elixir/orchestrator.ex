@@ -609,11 +609,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp reset_stall_baseline(running_entry) when is_map(running_entry) do
-    if is_nil(Map.get(running_entry, :last_codex_timestamp)) do
-      Map.put(running_entry, :last_codex_timestamp, DateTime.utc_now())
-    else
-      running_entry
-    end
+    Map.put(running_entry, :last_codex_timestamp, DateTime.utc_now())
   end
 
   defp terminate_task(pid) when is_pid(pid) do

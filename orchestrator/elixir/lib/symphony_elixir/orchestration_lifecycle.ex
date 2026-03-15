@@ -953,7 +953,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp maybe_recover_blocked_pr(issue, runtime, opts, settings) do
     if blocked_with_tool_unavailable?(runtime) do
       branch = workpad_branch(runtime) || issue.branch_name
-      git_state = %{branch: branch, remote_branch_published: is_binary(branch)}
+      git_state = %{branch: branch}
 
       case PullRequests.resolve_or_create(issue, git_state, Keyword.put(opts, :settings, settings)) do
         {:ok, pr_info} ->
