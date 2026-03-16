@@ -13,26 +13,27 @@ defmodule SymphonyElixir.MixProject do
           threshold: 100
         ],
         ignore_modules: [
-          SymphonyElixir.Config,
-          SymphonyElixir.Linear.Client,
-          SymphonyElixir.SpecsCheck,
+          # GenServers and runtime modules (complex state, integration-tested)
           SymphonyElixir.Orchestrator,
           SymphonyElixir.Orchestrator.State,
           SymphonyElixir.AgentRunner,
-          SymphonyElixir.CLI,
+          SymphonyElixir.StatusDashboard,
+          SymphonyElixir.HttpServer,
+          SymphonyElixir.Workspace,
+          SymphonyElixir.LogFile,
+          # External integrations
+          SymphonyElixir.Linear.Client,
           SymphonyElixir.Codex.AppServer,
           SymphonyElixir.Codex.DynamicTool,
-          SymphonyElixir.HttpServer,
-          SymphonyElixir.StatusDashboard,
-          SymphonyElixir.LogFile,
-          SymphonyElixir.Workspace,
+          # CLI and mix tasks
+          SymphonyElixir.CLI,
+          SymphonyElixir.SpecsCheck,
+          # Web layer (Phoenix boilerplate)
           SymphonyElixirWeb.DashboardLive,
           SymphonyElixirWeb.Endpoint,
           SymphonyElixirWeb.ErrorHTML,
           SymphonyElixirWeb.ErrorJSON,
           SymphonyElixirWeb.Layouts,
-          SymphonyElixirWeb.ObservabilityApiController,
-          SymphonyElixirWeb.Presenter,
           SymphonyElixirWeb.StaticAssetController,
           SymphonyElixirWeb.StaticAssets,
           SymphonyElixirWeb.Router,

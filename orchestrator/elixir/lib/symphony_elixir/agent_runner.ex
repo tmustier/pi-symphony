@@ -190,7 +190,7 @@ defmodule SymphonyElixir.AgentRunner do
     case WorkspaceGit.inspect_workspace(workspace, worker_host) do
       {:ok, %{remote_branch_published: true}} ->
         review_enabled = Config.settings!().review.enabled == true
-        not review_enabled or ReviewArtifact.exists?(workspace)
+        not review_enabled or ReviewArtifact.exists?(workspace, worker_host)
 
       _ ->
         false
