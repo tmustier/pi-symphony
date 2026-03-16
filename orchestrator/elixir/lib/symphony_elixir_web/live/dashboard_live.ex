@@ -270,7 +270,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp worker_totals(payload) do
-    payload[:worker_totals] || payload[:codex_totals] ||
+    payload[:worker_totals] || payload[:worker_totals] ||
       %{
         input_tokens: 0,
         output_tokens: 0,

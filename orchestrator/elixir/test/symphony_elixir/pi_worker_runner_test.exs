@@ -98,10 +98,10 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
 
       assert String.starts_with?(session_dir, expected_workspace <> "/.pi-rpc-sessions/")
 
-      assert_receive {:codex_worker_update, "issue-pi-runtime", %{event: :session_started, session_id: "pi-session-turn-1", timestamp: %DateTime{}}},
+      assert_receive {:worker_update, "issue-pi-runtime", %{event: :session_started, session_id: "pi-session-turn-1", timestamp: %DateTime{}}},
                      1_000
 
-      assert_receive {:codex_worker_update, "issue-pi-runtime", %{event: :turn_completed, usage: %{"input" => 12, "output" => 4, "totalTokens" => 16}}},
+      assert_receive {:worker_update, "issue-pi-runtime", %{event: :turn_completed, usage: %{"input" => 12, "output" => 4, "totalTokens" => 16}}},
                      1_000
     after
       File.rm_rf(test_root)

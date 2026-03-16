@@ -4,11 +4,11 @@ defmodule SymphonyElixir.PiEventMapperTest do
   alias SymphonyElixir.Pi.EventMapper
 
   test "session_started emits a compatible orchestrator update" do
-    update = EventMapper.session_started("pi-session-turn-1", %{codex_app_server_pid: "1234"})
+    update = EventMapper.session_started("pi-session-turn-1", %{worker_pid: "1234"})
 
     assert update.event == :session_started
     assert update.session_id == "pi-session-turn-1"
-    assert update.codex_app_server_pid == "1234"
+    assert update.worker_pid == "1234"
     assert %DateTime{} = update.timestamp
   end
 

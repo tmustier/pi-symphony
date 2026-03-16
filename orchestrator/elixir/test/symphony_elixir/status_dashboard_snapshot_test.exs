@@ -11,7 +11,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
        %{
          running: [],
          retrying: [],
-         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
          rate_limits: nil
        }}
 
@@ -36,7 +36,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
        %{
          running: [],
          retrying: [],
-         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
          rate_limits: nil
        }}
 
@@ -50,25 +50,25 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
          running: [
            running_entry(%{
              identifier: "MT-101",
-             codex_total_tokens: 120_450,
+             worker_total_tokens: 120_450,
              runtime_seconds: 785,
              turn_count: 11,
-             last_codex_event: "turn_completed",
-             last_codex_message: turn_completed_message("completed")
+             last_worker_event: "turn_completed",
+             last_worker_message: turn_completed_message("completed")
            }),
            running_entry(%{
              identifier: "MT-102",
              session_id: "thread-abcdef1234567890",
-             codex_app_server_pid: "5252",
-             codex_total_tokens: 89_200,
+             worker_pid: "5252",
+             worker_total_tokens: 89_200,
              runtime_seconds: 412,
              turn_count: 4,
-             last_codex_event: "codex/event/task_started",
-             last_codex_message: exec_command_message("mix test --cover")
+             last_worker_event: "codex/event/task_started",
+             last_worker_message: exec_command_message("mix test --cover")
            })
          ],
          retrying: [],
-         codex_totals: %{
+         worker_totals: %{
            input_tokens: 250_000,
            output_tokens: 18_500,
            total_tokens: 268_500,
@@ -93,11 +93,11 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
            running_entry(%{
              identifier: "MT-638",
              state: "retrying",
-             codex_total_tokens: 14_200,
+             worker_total_tokens: 14_200,
              runtime_seconds: 1_225,
              turn_count: 7,
-             last_codex_event: :notification,
-             last_codex_message: agent_message_delta("waiting on rate-limit backoff window")
+             last_worker_event: :notification,
+             last_worker_message: agent_message_delta("waiting on rate-limit backoff window")
            })
          ],
          retrying: [
@@ -126,7 +126,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
              error: "fourth queued retry should also render after removing the top-three limit"
            })
          ],
-         codex_totals: %{input_tokens: 18_000, output_tokens: 2_200, total_tokens: 20_200, seconds_running: 2_700},
+         worker_totals: %{input_tokens: 18_000, output_tokens: 2_200, total_tokens: 20_200, seconds_running: 2_700},
          rate_limits: %{
            limit_id: "gpt-5",
            primary: %{remaining: 0, limit: 20_000, reset_in_seconds: 95},
@@ -151,7 +151,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
              error: "error with \\nnewline"
            })
          ],
-         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
          rate_limits: nil
        }}
 
@@ -173,7 +173,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
          running: [running_entry(%{identifier: "MT-880"})],
          retrying: [],
          tracked: [tracked_entry(%{issue_id: "issue-merge-pending", issue_identifier: "MT-880"})],
-         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
          rate_limits: nil
        }}
 
@@ -190,15 +190,15 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
            running_entry(%{
              identifier: "MT-777",
              state: "running",
-             codex_total_tokens: 3_200,
+             worker_total_tokens: 3_200,
              runtime_seconds: 75,
              turn_count: 7,
-             last_codex_event: "codex/event/token_count",
-             last_codex_message: token_usage_message(90, 12, 102)
+             last_worker_event: "codex/event/token_count",
+             last_worker_message: token_usage_message(90, 12, 102)
            })
          ],
          retrying: [],
-         codex_totals: %{input_tokens: 90, output_tokens: 12, total_tokens: 102, seconds_running: 75},
+         worker_totals: %{input_tokens: 90, output_tokens: 12, total_tokens: 102, seconds_running: 75},
          rate_limits: %{
            limit_id: "priority-tier",
            primary: %{remaining: 100, limit: 100, reset_in_seconds: 1},
@@ -247,7 +247,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
              }
            })
          ],
-         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
          rate_limits: nil
        }}
 
@@ -264,12 +264,12 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
         identifier: "MT-000",
         state: "running",
         session_id: "thread-1234567890",
-        codex_app_server_pid: "4242",
-        codex_total_tokens: 0,
+        worker_pid: "4242",
+        worker_total_tokens: 0,
         runtime_seconds: 0,
         turn_count: 1,
-        last_codex_event: :notification,
-        last_codex_message: turn_started_message()
+        last_worker_event: :notification,
+        last_worker_message: turn_started_message()
       },
       overrides
     )
