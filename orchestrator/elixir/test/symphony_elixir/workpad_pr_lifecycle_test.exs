@@ -4162,4 +4162,101 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
         else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
     end
   end
+
+  test "bootstrap clears stale closed PR metadata when closed_pr_policy is new_branch" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_closed_pr_policy: "new_branch"
+    )
+
+    issue = %Issue{
+      id: "issue-stale-closed-pr",
+      identifier: "MT-STALE",
+      state: "In Progress",
+      title: "Stale closed PR recovery",
+      description: "Workpad has closed PR metadata that should be cleared",
+      url: "https://example.org/issues/MT-STALE",
+      branch_name: "feature/stale-branch",
+      labels: ["symphony"],
+      assigned_to_worker: true,
+      comments: [
+        %{
+          id: "comment-stale-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/stale-branch\n  pr:\n    number: 200\n    url: https://github.com/acme/widgets/pull/200\n    head_sha: staleabc\n  waiting:\n    reason: checks_pending\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      # inspect_state returns CLOSED for the stale PR
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 200,
+           "url" => "https://github.com/acme/widgets/pull/200",
+           "state" => "CLOSED",
+           "isDraft" => false,
+           "headRefName" => "feature/stale-branch",
+           "headRefOid" => "staleabc",
+           "baseRefName" => "main",
+           "mergeStateStatus" => nil,
+           "mergeable" => "UNKNOWN",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => []
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      # Stale PR metadata should be cleared
+      assert runtime.workpad.metadata["pr"]["number"] == nil
+      assert runtime.workpad.metadata["pr"]["url"] == nil
+
+      # Review metadata should also be cleared to prevent writing to the old PR's comment
+      assert runtime.workpad.metadata["review"]["comment_id"] == nil
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 0
+
+      # Phase should reset to default (implementing) to allow fresh dispatch
+      assert runtime.phase == "implementing"
+      assert runtime.dispatch_allowed == true
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
 end

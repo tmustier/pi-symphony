@@ -1149,17 +1149,33 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp passive_pr_updates_from_result({:ok, pr_state}, issue, runtime, settings) when is_map(pr_state) do
-    pr_metadata = %{number: pr_state.number, url: pr_state.url, head_sha: pr_state.head_sha}
-    review_status = review_gate(runtime, %{head_sha: pr_state.head_sha}, nil, settings)
-    observation_gates = passive_pr_observation_gates(issue, pr_state, review_status, settings)
+    if stale_closed_pr_clearable?(pr_state, runtime, settings) do
+      Logger.info(
+        "Clearing stale closed PR metadata for issue_identifier=#{issue.identifier} " <>
+          "pr_number=#{pr_state.number} closed_pr_policy=#{settings.pr.closed_pr_policy}"
+      )
 
-    %{
-      phase: passive_phase_after_observation(issue, runtime, pr_state, review_status, settings),
-      pr: pr_metadata,
-      waiting_reason: passive_waiting_reason(issue, runtime, pr_state, review_status, settings),
-      next_intended_action: passive_next_action(issue, runtime, pr_state, review_status, settings),
-      observation_gates: observation_gates
-    }
+      %{
+        phase: settings.orchestration.default_phase,
+        pr: %{number: nil, url: nil, head_sha: nil},
+        review: %{comment_id: nil, passes_completed: 0, last_reviewed_head_sha: nil, last_fixed_head_sha: nil},
+        waiting_reason: nil,
+        next_intended_action: "dispatch_worker",
+        observation_gates: %{"pr" => "pending"}
+      }
+    else
+      pr_metadata = %{number: pr_state.number, url: pr_state.url, head_sha: pr_state.head_sha}
+      review_status = review_gate(runtime, %{head_sha: pr_state.head_sha}, nil, settings)
+      observation_gates = passive_pr_observation_gates(issue, pr_state, review_status, settings)
+
+      %{
+        phase: passive_phase_after_observation(issue, runtime, pr_state, review_status, settings),
+        pr: pr_metadata,
+        waiting_reason: passive_waiting_reason(issue, runtime, pr_state, review_status, settings),
+        next_intended_action: passive_next_action(issue, runtime, pr_state, review_status, settings),
+        observation_gates: observation_gates
+      }
+    end
   end
 
   defp passive_pr_updates_from_result({:error, _reason}, _issue, _runtime, _settings) do
@@ -1173,6 +1189,12 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp passive_pr_updates_from_result(_result, _issue, _runtime, _settings), do: %{}
+
+  defp stale_closed_pr_clearable?(pr_state, runtime, settings) do
+    passive_pr_gate(pr_state) == "closed" and
+      settings.pr.closed_pr_policy == "new_branch" and
+      not merge_phase?(runtime.phase)
+  end
 
   defp passive_pr_observation_gates(issue, pr_state, review_status, settings) do
     %{
