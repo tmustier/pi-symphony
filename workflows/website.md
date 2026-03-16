@@ -67,7 +67,14 @@ pr:
   review_comment_mode: upsert
   review_comment_marker: "<!-- symphony-review -->"
 review:
-  enabled: false
+  enabled: true
+  agent: pr-reviewer
+  output_format: structured_markdown_v1
+  max_passes: 2
+  fix_consideration_severities:
+    - P0
+    - P1
+    - P2
 merge:
   mode: disabled
 hooks:

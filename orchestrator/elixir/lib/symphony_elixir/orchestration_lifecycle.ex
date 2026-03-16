@@ -72,6 +72,18 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       {:ok, %Issue{} = issue} ->
         git_state = inspect_workspace_git(running_entry, opts)
         pr_result = PullRequests.resolve_or_create(issue, git_state, Keyword.put(opts, :settings, settings))
+
+        case pr_result do
+          {:ok, pr_info} ->
+            Logger.info("PR resolved for issue_id=#{issue_id} issue_identifier=#{issue.identifier} pr_number=#{Map.get(pr_info, :number)} pr_url=#{Map.get(pr_info, :url)}")
+
+          {:skip, details} ->
+            Logger.info("PR skipped for issue_id=#{issue_id} issue_identifier=#{issue.identifier} reason=#{inspect(Map.get(details, :reason))}")
+
+          {:error, reason} ->
+            Logger.warning("PR resolution failed for issue_id=#{issue_id} issue_identifier=#{issue.identifier} reason=#{inspect(reason)}")
+        end
+
         runtime = OrchestrationPolicy.issue_runtime(issue, settings)
         review_result = maybe_persist_review_comment(issue, runtime, pr_result, running_entry, opts, settings)
         merge_result = maybe_merge_pull_request(issue, runtime, pr_result, opts, settings)
@@ -1030,8 +1042,11 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       branch = workpad_branch(runtime) || issue.branch_name
       git_state = %{branch: branch, repo_slug: settings.pr.repo_slug}
 
+      Logger.info("Attempting PR recovery for issue_identifier=#{issue.identifier} branch=#{branch} repo=#{settings.pr.repo_slug}")
+
       case PullRequests.resolve_or_create(issue, git_state, Keyword.put(opts, :settings, settings)) do
         {:ok, pr_info} ->
+          Logger.info("PR recovery succeeded for issue_identifier=#{issue.identifier} pr_number=#{Map.get(pr_info, :number)}")
           head_sha = Map.get(pr_info, :head_sha)
           review_recovery = maybe_recover_review_artifact(issue, pr_info, runtime, opts, settings)
 
@@ -1058,7 +1073,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
               base
           end
 
-        _ ->
+        other ->
+          Logger.warning("PR recovery failed for issue_identifier=#{issue.identifier} result=#{inspect(other)}")
           %{}
       end
     else

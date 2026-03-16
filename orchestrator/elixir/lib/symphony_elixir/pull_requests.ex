@@ -624,7 +624,7 @@ defmodule SymphonyElixir.PullRequests do
     %{
       branch: pick_string([Map.get(git_state, :branch), issue.branch_name]),
       head_sha: pick_string([Map.get(git_state, :head_sha)]),
-      repo_slug: pick_string([Keyword.get(opts, :repo_slug), Map.get(git_state, :repo_slug)]),
+      repo_slug: pick_string([Keyword.get(opts, :repo_slug), Map.get(git_state, :repo_slug), settings.pr.repo_slug]),
       base_branch: settings.pr.base_branch,
       remote_branch_published: Map.get(git_state, :remote_branch_published) == true
     }
