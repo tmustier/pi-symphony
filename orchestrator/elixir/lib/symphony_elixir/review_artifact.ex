@@ -78,7 +78,9 @@ defmodule SymphonyElixir.ReviewArtifact do
 
   defp parse_artifact(path, body) do
     case normalize_body(body) do
-      nil -> {:ok, :missing}
+      nil ->
+        {:ok, :missing}
+
       %{body: normalized_body, reviewed_head_sha: sha} ->
         {:ok, %{path: path, body: normalized_body, reviewed_head_sha: sha}}
     end

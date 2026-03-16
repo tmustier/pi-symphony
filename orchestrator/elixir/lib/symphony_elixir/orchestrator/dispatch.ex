@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Orchestrator.Dispatch do
   @moduledoc """
   Pure decision functions for issue dispatch eligibility, sorting, and worker selection.
-  
+
   Extracted from the monolithic Orchestrator GenServer to improve maintainability
   and testability of the dispatch logic.
   """

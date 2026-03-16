@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Orchestrator.Retry do
   @moduledoc """
   Retry scheduling, backoff calculation, and retry state management.
-  
+
   Extracted from the monolithic Orchestrator GenServer to isolate retry logic
   and make it more testable and maintainable.
   """

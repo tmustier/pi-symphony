@@ -332,7 +332,6 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp tracked_observation_metadata(_observation), do: nil
 
-
   defp maybe_put(payload, _key, nil), do: payload
   defp maybe_put(payload, key, value), do: Map.put(payload, key, value)
 

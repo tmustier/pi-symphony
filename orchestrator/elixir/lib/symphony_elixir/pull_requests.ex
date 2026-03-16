@@ -974,5 +974,4 @@ defmodule SymphonyElixir.PullRequests do
         :error
     end
   end
-
 end

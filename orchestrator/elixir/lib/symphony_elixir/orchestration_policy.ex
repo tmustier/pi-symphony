@@ -154,6 +154,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     Enum.flat_map(relations, fn
       %{id: id, identifier: identifier} when is_binary(id) ->
         [%{id: id, identifier: identifier}]
+
       _ ->
         []
     end)
@@ -436,12 +437,9 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   defp default_waiting_reason(false, "observe", _blocking_reason), do: "observe_only"
   defp default_waiting_reason(_passive_phase, _rollout_mode, _blocking_reason), do: nil
 
-
   defp comment_field(comment, field) when is_map(comment) and is_atom(field) do
     fetch_value(comment, field)
   end
-
-
 
   defp normalize_label(value) do
     case normalize_optional_string(value) do
@@ -449,5 +447,4 @@ defmodule SymphonyElixir.OrchestrationPolicy do
       normalized -> String.downcase(normalized)
     end
   end
-
 end

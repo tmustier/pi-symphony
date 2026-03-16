@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Orchestrator.Metrics do
   @moduledoc """
   Token tracking, usage parsing, rate limit extraction, and performance metrics.
-  
+
   Extracted from the monolithic Orchestrator GenServer to isolate metrics logic
   and make it more testable and maintainable.
   """
@@ -373,12 +373,12 @@ defmodule SymphonyElixir.Orchestrator.Metrics do
   defp integer_like(_value), do: nil
 
   defp worker_pid_for_update(_existing, %{worker_pid: pid})
-      when is_binary(pid),
-      do: pid
+       when is_binary(pid),
+       do: pid
 
   defp worker_pid_for_update(_existing, %{worker_pid: pid})
-      when is_integer(pid),
-      do: Integer.to_string(pid)
+       when is_integer(pid),
+       do: Integer.to_string(pid)
 
   defp worker_pid_for_update(_existing, %{worker_pid: pid}) when is_list(pid),
     do: to_string(pid)

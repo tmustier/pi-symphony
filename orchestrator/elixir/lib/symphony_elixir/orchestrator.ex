@@ -637,8 +637,6 @@ defmodule SymphonyElixir.Orchestrator do
     end)
   end
 
-
-
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
     case Dispatch.revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, Dispatch.terminal_state_set(), state.tracked) do
       {:ok, %Issue{} = refreshed_issue} ->
@@ -725,8 +723,6 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-
-
   defp complete_issue(%State{} = state, issue_id) do
     %{
       state
@@ -767,8 +763,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp maybe_schedule_continuation_retry(%State{} = state, _issue_id, _running_entry), do: state
-
-
 
   defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata) do
     case Tracker.fetch_candidate_issues() do
@@ -877,15 +871,11 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | claimed: MapSet.delete(state.claimed, issue_id)}
   end
 
-
-
   defp maybe_put_runtime_value(running_entry, _key, nil), do: running_entry
 
   defp maybe_put_runtime_value(running_entry, key, value) when is_map(running_entry) do
     Map.put(running_entry, key, value)
   end
-
-
 
   defp find_issue_by_id(issues, issue_id) when is_binary(issue_id) do
     Enum.find(issues, fn
@@ -912,8 +902,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp issue_context(%Issue{id: issue_id, identifier: identifier}) do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
-
-
 
   @spec request_refresh() :: map() | :unavailable
   def request_refresh do
@@ -1034,8 +1022,6 @@ defmodule SymphonyElixir.Orchestrator do
      }, state}
   end
 
-
-
   defp schedule_tick(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do
     if is_reference(state.tick_timer_ref) do
       Process.cancel_timer(state.tick_timer_ref)
@@ -1096,8 +1082,6 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-
-
   defp refresh_issue_for_continuation(issue_id) when is_binary(issue_id) do
     case Tracker.fetch_issue_states_by_ids([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} -> {:ok, refreshed_issue}
@@ -1146,6 +1130,7 @@ defmodule SymphonyElixir.Orchestrator do
         |> Enum.flat_map(fn
           %{id: blocker_id, identifier: _} when is_binary(blocker_id) ->
             [{blocker_id, %{id: issue_id, identifier: entry.issue_identifier}}]
+
           _ ->
             []
         end)
@@ -1168,8 +1153,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp update_tracked_issue(state, _issue), do: state
 
-
-
   defp apply_worker_token_delta(
          %{worker_totals: worker_totals} = state,
          %{input_tokens: input, output_tokens: output, total_tokens: total} = token_delta
@@ -1191,8 +1174,4 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp apply_worker_rate_limits(state, _update), do: state
-
-
-
-
 end

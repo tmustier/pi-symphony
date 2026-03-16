@@ -613,11 +613,9 @@ defmodule SymphonyElixir.Workpad do
   defp normalize_map(%{} = value), do: value
   defp normalize_map(_value), do: %{}
 
-
   defp comment_id(comment), do: fetch_value(comment, :id)
   defp comment_body(comment), do: fetch_value(comment, :body) || ""
   defp comment_updated_at(comment), do: fetch_value(comment, :updated_at)
-
 
   defp normalize_comment_timestamp(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
 

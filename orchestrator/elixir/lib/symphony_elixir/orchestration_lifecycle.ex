@@ -544,12 +544,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     if pr_number != nil and human_approval_ready?(issue, settings) do
       context = %{
         number: pr_number,
-        repo_slug: pick_string([
-          Keyword.get(opts, :repo_slug),
-          Map.get(pr, :repo_slug),
-          settings.pr.repo_slug,
-          repo_slug_from_pr_url(pr_url)
-        ]),
+        repo_slug:
+          pick_string([
+            Keyword.get(opts, :repo_slug),
+            Map.get(pr, :repo_slug),
+            settings.pr.repo_slug,
+            repo_slug_from_pr_url(pr_url)
+          ]),
         url: pr_url,
         expected_head_sha: Map.get(pr, :head_sha)
       }
@@ -574,10 +575,11 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
           waiting_reason: nil,
           next_intended_action: "reconcile_tracker_completion",
           merge: merge_meta,
-          observation_gates: Map.merge(Map.get(updates, :observation_gates, %{}), %{
-            "mergeability" => "pass",
-            "pr" => "merged"
-          })
+          observation_gates:
+            Map.merge(Map.get(updates, :observation_gates, %{}), %{
+              "mergeability" => "pass",
+              "pr" => "merged"
+            })
         })
 
       merge_completion_pending_or_done?(merge_result) ->
@@ -1123,8 +1125,6 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     |> normalize_optional_string()
   end
 
-
-
   defp passive_pr_context(runtime, opts) do
     pr_metadata = current_pr_metadata(runtime)
     pr_number = Map.get(pr_metadata, "number")
@@ -1330,9 +1330,6 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
-
-
   defp normalize_map(%{} = map), do: map
   defp normalize_map(_value), do: %{}
-
 end

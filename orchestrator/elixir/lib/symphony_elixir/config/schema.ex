@@ -816,7 +816,6 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp normalize_optional_path(_value), do: nil
 
-
   defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
 
   defp resolve_secret_setting(value, fallback) when is_binary(value) do

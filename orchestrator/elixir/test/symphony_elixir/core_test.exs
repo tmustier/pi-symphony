@@ -1370,8 +1370,7 @@ defmodule SymphonyElixir.CoreTest do
       comments: [
         %{
           id: "wpad-302",
-          body:
-            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: rework\n  branch: feature/normal-rework\n  observation:\n    gates:\n      mergeability: pass\n```",
+          body: "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: rework\n  branch: feature/normal-rework\n  observation:\n    gates:\n      mergeability: pass\n```",
           resolved: false,
           updated_at: DateTime.utc_now()
         }

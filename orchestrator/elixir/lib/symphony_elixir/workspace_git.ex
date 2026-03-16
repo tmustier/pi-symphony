@@ -105,7 +105,6 @@ defmodule SymphonyElixir.WorkspaceGit do
     end
   end
 
-
   defp shell_escape(value) do
     "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
   end
