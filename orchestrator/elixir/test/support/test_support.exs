@@ -142,6 +142,7 @@ defmodule SymphonyElixir.TestSupport do
           rollout_kill_switch_file: nil,
           pr_auto_create: false,
           pr_base_branch: "main",
+          pr_repo_slug: nil,
           pr_reuse_branch_pr: true,
           pr_closed_pr_policy: "new_branch",
           pr_attach_to_tracker: true,
@@ -221,6 +222,7 @@ defmodule SymphonyElixir.TestSupport do
     rollout_kill_switch_file = Keyword.get(config, :rollout_kill_switch_file)
     pr_auto_create = Keyword.get(config, :pr_auto_create)
     pr_base_branch = Keyword.get(config, :pr_base_branch)
+    pr_repo_slug = Keyword.get(config, :pr_repo_slug)
     pr_reuse_branch_pr = Keyword.get(config, :pr_reuse_branch_pr)
     pr_closed_pr_policy = Keyword.get(config, :pr_closed_pr_policy)
     pr_attach_to_tracker = Keyword.get(config, :pr_attach_to_tracker)
@@ -310,6 +312,7 @@ defmodule SymphonyElixir.TestSupport do
         pr_yaml(%{
           auto_create: pr_auto_create,
           base_branch: pr_base_branch,
+          repo_slug: pr_repo_slug,
           reuse_branch_pr: pr_reuse_branch_pr,
           closed_pr_policy: pr_closed_pr_policy,
           attach_to_tracker: pr_attach_to_tracker,
@@ -397,6 +400,7 @@ defmodule SymphonyElixir.TestSupport do
       "pr:",
       "  auto_create: #{yaml_value(config.auto_create)}",
       "  base_branch: #{yaml_value(config.base_branch)}",
+      if(config[:repo_slug], do: "  repo_slug: #{yaml_value(config[:repo_slug])}", else: nil),
       "  reuse_branch_pr: #{yaml_value(config.reuse_branch_pr)}",
       "  closed_pr_policy: #{yaml_value(config.closed_pr_policy)}",
       "  attach_to_tracker: #{yaml_value(config.attach_to_tracker)}",
@@ -404,6 +408,7 @@ defmodule SymphonyElixir.TestSupport do
       "  review_comment_mode: #{yaml_value(config.review_comment_mode)}",
       "  review_comment_marker: #{yaml_value(config.review_comment_marker)}"
     ]
+    |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
 
