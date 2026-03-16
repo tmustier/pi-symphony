@@ -375,17 +375,17 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
-  @spec should_dispatch_issue_for_test(Issue.t(), term()) :: boolean()
-  def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state) do
-    Dispatch.should_dispatch_issue?(issue, state, Dispatch.active_state_set(), Dispatch.terminal_state_set())
+  @spec should_dispatch_issue_for_test(Issue.t(), term(), map()) :: boolean()
+  def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state, tracked_issues \\ %{}) do
+    Dispatch.should_dispatch_issue?(issue, state, Dispatch.active_state_set(), Dispatch.terminal_state_set(), tracked_issues)
   end
 
   @doc false
-  @spec revalidate_issue_for_dispatch_for_test(Issue.t(), ([String.t()] -> term())) ::
+  @spec revalidate_issue_for_dispatch_for_test(Issue.t(), ([String.t()] -> term()), map()) ::
           {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
-  def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
+  def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher, tracked_issues \\ %{})
       when is_function(issue_fetcher, 1) do
-    Dispatch.revalidate_issue_for_dispatch(issue, issue_fetcher, Dispatch.terminal_state_set())
+    Dispatch.revalidate_issue_for_dispatch(issue, issue_fetcher, Dispatch.terminal_state_set(), tracked_issues)
   end
 
   @doc false
@@ -629,7 +629,7 @@ defmodule SymphonyElixir.Orchestrator do
     issues
     |> Dispatch.sort_issues_for_dispatch()
     |> Enum.reduce(state, fn issue, state_acc ->
-      if Dispatch.should_dispatch_issue?(issue, state_acc, active_states, terminal_states) do
+      if Dispatch.should_dispatch_issue?(issue, state_acc, active_states, terminal_states, state_acc.tracked) do
         dispatch_issue(state_acc, issue)
       else
         state_acc
@@ -640,7 +640,7 @@ defmodule SymphonyElixir.Orchestrator do
 
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
-    case Dispatch.revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, Dispatch.terminal_state_set()) do
+    case Dispatch.revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, Dispatch.terminal_state_set(), state.tracked) do
       {:ok, %Issue{} = refreshed_issue} ->
         do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
 
@@ -750,7 +750,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case refresh_issue_for_continuation(issue_id) do
       {:ok, %Issue{} = refreshed_issue} ->
-        if Dispatch.retry_candidate_issue?(refreshed_issue, Dispatch.terminal_state_set()) and
+        if Dispatch.retry_candidate_issue?(refreshed_issue, Dispatch.terminal_state_set(), state.tracked) and
              immediate_continuation_allowed?(refreshed_issue) do
           Retry.schedule_issue_retry(state, issue_id, 1, metadata)
         else
@@ -800,7 +800,7 @@ defmodule SymphonyElixir.Orchestrator do
         cleanup_issue_workspace(issue.identifier, metadata[:worker_host])
         {:noreply, release_issue_claim(state, issue_id)}
 
-      Dispatch.retry_candidate_issue?(issue, terminal_states) ->
+      Dispatch.retry_candidate_issue?(issue, terminal_states, state.tracked) ->
         handle_active_retry(state, issue, attempt, metadata)
 
       true ->
@@ -853,7 +853,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_active_retry(state, issue, attempt, metadata) do
-    if Dispatch.retry_candidate_issue?(issue, Dispatch.terminal_state_set()) and
+    if Dispatch.retry_candidate_issue?(issue, Dispatch.terminal_state_set(), state.tracked) and
          Dispatch.dispatch_slots_available?(issue, state) and
          Dispatch.worker_slots_available?(state, metadata[:worker_host]) do
       {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host])}

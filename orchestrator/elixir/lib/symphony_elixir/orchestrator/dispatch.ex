@@ -26,14 +26,17 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Determine if an issue should be dispatched based on current state.
   """
+  def should_dispatch_issue?(issue, state, active_states, terminal_states, tracked_issues \\ %{})
+
   def should_dispatch_issue?(
         %Issue{} = issue,
         %State{running: running, claimed: claimed} = state,
         active_states,
-        terminal_states
+        terminal_states,
+        tracked_issues
       ) do
     candidate_issue?(issue, active_states, terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
+      !todo_issue_blocked_by_non_terminal?(issue, terminal_states, tracked_issues) and
       !MapSet.member?(claimed, issue.id) and
       !Map.has_key?(running, issue.id) and
       available_slots(state) > 0 and
@@ -41,7 +44,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
       worker_slots_available?(state)
   end
 
-  def should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
+  def should_dispatch_issue?(_issue, _state, _active_states, _terminal_states, _tracked_issues), do: false
 
   @doc """
   Check if an issue is a candidate for dispatch.
@@ -96,14 +99,27 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   @doc """
   Check if a TODO issue is blocked by non-terminal blockers.
+
+  When `tracked_issues` is provided, a blocker is considered effectively completed
+  if its workpad phase indicates post-implementation progress (PR open, in review,
+  merging, etc.) — even if the Linear state hasn't reached a terminal state yet.
+  This prevents pipeline deadlocks when blockers have finished their work but are
+  waiting on merge gates.
   """
+  def todo_issue_blocked_by_non_terminal?(issue, terminal_states, tracked_issues \\ %{})
+
   def todo_issue_blocked_by_non_terminal?(
         %Issue{state: issue_state, blocked_by: blockers},
-        terminal_states
+        terminal_states,
+        tracked_issues
       )
       when is_binary(issue_state) and is_list(blockers) do
     normalize_issue_state(issue_state) == "todo" and
       Enum.any?(blockers, fn
+        %{id: blocker_id, state: blocker_state} when is_binary(blocker_state) ->
+          !terminal_issue_state?(blocker_state, terminal_states) and
+            !blocker_effectively_completed?(blocker_id, tracked_issues)
+
         %{state: blocker_state} when is_binary(blocker_state) ->
           !terminal_issue_state?(blocker_state, terminal_states)
 
@@ -112,7 +128,33 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
       end)
   end
 
-  def todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+  def todo_issue_blocked_by_non_terminal?(_issue, _terminal_states, _tracked_issues), do: false
+
+  @blocker_completed_phases MapSet.new([
+    "waiting_for_checks",
+    "waiting_for_human",
+    "ready_to_merge",
+    "merging"
+  ])
+
+  @doc """
+  Check if a blocker issue has effectively completed its work based on workpad phase.
+
+  Returns true when the blocker's tracked workpad phase indicates that implementation
+  is done and a PR exists — the issue is just waiting on merge gates.
+  """
+  def blocker_effectively_completed?(blocker_id, tracked_issues)
+      when is_binary(blocker_id) and is_map(tracked_issues) do
+    case Map.get(tracked_issues, blocker_id) do
+      %{phase: phase} when is_binary(phase) ->
+        MapSet.member?(@blocker_completed_phases, phase)
+
+      _ ->
+        false
+    end
+  end
+
+  def blocker_effectively_completed?(_blocker_id, _tracked_issues), do: false
 
   @doc """
   Check if an issue state is terminal.
@@ -160,9 +202,9 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Check if an issue is a retry candidate.
   """
-  def retry_candidate_issue?(%Issue{} = issue, terminal_states) do
+  def retry_candidate_issue?(%Issue{} = issue, terminal_states, tracked_issues \\ %{}) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
+      !todo_issue_blocked_by_non_terminal?(issue, terminal_states, tracked_issues)
   end
 
   @doc """
@@ -210,11 +252,13 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Revalidate an issue for dispatch by refreshing its state.
   """
-  def revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
+  def revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_states, tracked_issues \\ %{})
+
+  def revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states, tracked_issues)
       when is_binary(issue_id) and is_function(issue_fetcher, 1) do
     case issue_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
-        if retry_candidate_issue?(refreshed_issue, terminal_states) do
+        if retry_candidate_issue?(refreshed_issue, terminal_states, tracked_issues) do
           {:ok, refreshed_issue}
         else
           {:skip, refreshed_issue}
@@ -228,7 +272,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     end
   end
 
-  def revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
+  def revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _tracked_issues), do: {:ok, issue}
 
   @doc """
   Select the best worker host for dispatching an issue.

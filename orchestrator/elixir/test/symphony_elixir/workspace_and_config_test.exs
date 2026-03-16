@@ -726,6 +726,100 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert skipped_issue.blocked_by == [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
   end
 
+  test "todo issue with non-terminal blocker is unblocked when blocker workpad shows post-work phase" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      tracked: %{
+        "blocker-1" => %{
+          issue_id: "blocker-1",
+          phase: "waiting_for_checks"
+        }
+      },
+      worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "blocked-3",
+      identifier: "MT-2001",
+      title: "Blocked by in-progress issue with PR",
+      state: "Todo",
+      blocked_by: [%{id: "blocker-1", identifier: "MT-2002", state: "In Progress"}]
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state, state.tracked)
+  end
+
+  test "todo issue with non-terminal blocker remains blocked when blocker has no tracked entry" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      tracked: %{},
+      worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "blocked-4",
+      identifier: "MT-2003",
+      title: "Blocked by unknown issue",
+      state: "Todo",
+      blocked_by: [%{id: "blocker-unknown", identifier: "MT-2004", state: "In Progress"}]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state, state.tracked)
+  end
+
+  test "todo issue with non-terminal blocker remains blocked when blocker workpad shows implementing phase" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      tracked: %{
+        "blocker-2" => %{
+          issue_id: "blocker-2",
+          phase: "implementing"
+        }
+      },
+      worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "blocked-5",
+      identifier: "MT-2005",
+      title: "Blocked by still-implementing issue",
+      state: "Todo",
+      blocked_by: [%{id: "blocker-2", identifier: "MT-2006", state: "In Progress"}]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state, state.tracked)
+  end
+
+  test "blocker_effectively_completed? returns true for post-work phases" do
+    alias SymphonyElixir.Orchestrator.Dispatch
+
+    tracked = %{
+      "a" => %{phase: "waiting_for_checks"},
+      "b" => %{phase: "waiting_for_human"},
+      "c" => %{phase: "ready_to_merge"},
+      "d" => %{phase: "merging"},
+      "e" => %{phase: "implementing"},
+      "f" => %{phase: "rework"}
+    }
+
+    assert Dispatch.blocker_effectively_completed?("a", tracked)
+    assert Dispatch.blocker_effectively_completed?("b", tracked)
+    assert Dispatch.blocker_effectively_completed?("c", tracked)
+    assert Dispatch.blocker_effectively_completed?("d", tracked)
+    refute Dispatch.blocker_effectively_completed?("e", tracked)
+    refute Dispatch.blocker_effectively_completed?("f", tracked)
+    refute Dispatch.blocker_effectively_completed?("missing", tracked)
+  end
+
   test "workspace remove returns error information for missing directory" do
     random_path =
       Path.join(

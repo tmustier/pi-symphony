@@ -1092,6 +1092,191 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
     end
   end
 
+  test "bootstrap lifecycle moves conflicting PR to rework phase with merge_conflict reason" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      merge_mode: "auto",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1"
+    )
+
+    issue = %Issue{
+      id: "issue-conflicting",
+      identifier: "MT-CONFLICT",
+      state: "In Review",
+      title: "Issue with merge conflict",
+      description: "Branch has diverged from main",
+      url: "https://example.org/issues/MT-CONFLICT",
+      branch_name: "feature/conflicting-branch",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/conflicting-branch\n  pr:\n    url: https://github.com/acme/widgets/pull/200\n    head_sha: conflict123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 200,
+           "url" => "https://github.com/acme/widgets/pull/200",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/conflicting-branch",
+           "headRefOid" => "conflict123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "DIRTY",
+           "mergeable" => "CONFLICTING",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => []
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+      gates = runtime.workpad.metadata["observation"]["gates"]
+
+      assert runtime.phase == "rework"
+      assert runtime.dispatch_allowed == true
+      assert gates["mergeability"] == "conflict"
+      assert gates["pr"] == "open"
+
+      # The observation stores the specific action, while the top-level next_intended_action
+      # shows "dispatch_worker" because rework is a dispatchable phase
+      observation = runtime.workpad.metadata["observation"]
+      assert observation["next_intended_action"] == "rebase_onto_base_branch"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "bootstrap lifecycle keeps non-conflict blocked mergeability in waiting_for_checks" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      merge_mode: "auto",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1"
+    )
+
+    issue = %Issue{
+      id: "issue-dirty",
+      identifier: "MT-DIRTY",
+      state: "In Review",
+      title: "Issue with dirty merge state",
+      description: "Merge state is dirty but not conflicting",
+      url: "https://example.org/issues/MT-DIRTY",
+      branch_name: "feature/dirty-branch",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "comment-1",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/dirty-branch\n  pr:\n    url: https://github.com/acme/widgets/pull/201\n    head_sha: dirty123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 201,
+           "url" => "https://github.com/acme/widgets/pull/201",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/dirty-branch",
+           "headRefOid" => "dirty123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "BLOCKED",
+           "mergeable" => "UNKNOWN",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => []
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      # Non-conflict blocked should stay in waiting_for_checks, NOT rework
+      assert runtime.phase == "waiting_for_checks"
+      refute runtime.waiting_reason == "merge_conflict"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
   test "workpad sync refreshes core observation gates over stale persisted values" do
     previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
