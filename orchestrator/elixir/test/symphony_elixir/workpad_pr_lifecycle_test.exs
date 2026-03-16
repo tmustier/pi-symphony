@@ -3002,7 +3002,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       completed: MapSet.new(),
       retry_attempts: %{},
       tracked: %{},
-      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+      worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
     }
 
     try do
@@ -3050,7 +3050,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       completed: MapSet.new(),
       retry_attempts: %{},
       tracked: %{},
-      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+      worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
     }
 
     try do

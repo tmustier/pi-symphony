@@ -428,7 +428,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total_tokens" => 12,
                "seconds_running" => 42.5
              },
-             "codex_totals" => %{
+             "worker_totals" => %{
                "input_tokens" => 4,
                "output_tokens" => 8,
                "total_tokens" => 12,
@@ -469,7 +469,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
              },
              "retry" => nil,
-             "logs" => %{"worker_session_logs" => [], "codex_session_logs" => []},
+             "logs" => %{"worker_session_logs" => [], "worker_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
              "tracked" => %{}
@@ -538,7 +538,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           }
         }
       ],
-      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       rate_limits: nil
     }
 
@@ -594,7 +594,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           workpad: %{marker_found: true, metadata_status: "ok"}
         }
       ],
-      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      worker_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       rate_limits: nil
     }
 
@@ -625,13 +625,13 @@ defmodule SymphonyElixir.ExtensionsTest do
           proof_events_path: "/tmp/pi-rpc/proof/events.jsonl",
           proof_summary_path: "/tmp/pi-rpc/proof/summary.json",
           turn_count: 2,
-          codex_app_server_pid: nil,
-          last_codex_message: "rendered",
-          last_codex_timestamp: nil,
-          last_codex_event: :notification,
-          codex_input_tokens: 4,
-          codex_output_tokens: 8,
-          codex_total_tokens: 12,
+          worker_pid: nil,
+          last_worker_message: "rendered",
+          last_worker_timestamp: nil,
+          last_worker_event: :notification,
+          worker_input_tokens: 4,
+          worker_output_tokens: 8,
+          worker_total_tokens: 12,
           started_at: DateTime.utc_now()
         }
       ],
@@ -651,7 +651,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           proof_summary_path: "/tmp/pi-rpc/proof/summary.json"
         }
       ],
-      codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
+      worker_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
       rate_limits: %{}
     }
 
@@ -865,8 +865,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           state: "In Progress",
           session_id: "thread-http",
           turn_count: 8,
-          last_codex_event: :notification,
-          last_codex_message: %{
+          last_worker_event: :notification,
+          last_worker_message: %{
             event: :notification,
             message: %{
               payload: %{
@@ -879,10 +879,10 @@ defmodule SymphonyElixir.ExtensionsTest do
               }
             }
           },
-          last_codex_timestamp: DateTime.utc_now(),
-          codex_input_tokens: 10,
-          codex_output_tokens: 12,
-          codex_total_tokens: 22,
+          last_worker_timestamp: DateTime.utc_now(),
+          worker_input_tokens: 10,
+          worker_output_tokens: 12,
+          worker_total_tokens: 22,
           started_at: DateTime.utc_now()
         }
       ])
@@ -999,13 +999,13 @@ defmodule SymphonyElixir.ExtensionsTest do
           proof_events_path: "/tmp/pi-rpc/proof/events.jsonl",
           proof_summary_path: "/tmp/pi-rpc/proof/summary.json",
           turn_count: 7,
-          codex_app_server_pid: nil,
-          last_codex_message: "rendered",
-          last_codex_timestamp: nil,
-          last_codex_event: :notification,
-          codex_input_tokens: 4,
-          codex_output_tokens: 8,
-          codex_total_tokens: 12,
+          worker_pid: nil,
+          last_worker_message: "rendered",
+          last_worker_timestamp: nil,
+          last_worker_event: :notification,
+          worker_input_tokens: 4,
+          worker_output_tokens: 8,
+          worker_total_tokens: 12,
           started_at: DateTime.utc_now()
         }
       ],
@@ -1023,7 +1023,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           proof_summary_path: "/tmp/pi-rpc/proof/summary.json"
         }
       ],
-      codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
+      worker_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
   end

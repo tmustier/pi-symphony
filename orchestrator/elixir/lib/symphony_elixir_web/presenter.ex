@@ -23,8 +23,7 @@ defmodule SymphonyElixirWeb.Presenter do
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           tracked: Enum.map(tracked, &tracked_entry_payload/1),
-          worker_totals: snapshot.codex_totals,
-          codex_totals: snapshot.codex_totals,
+          worker_totals: snapshot.worker_totals,
           rate_limits: snapshot.rate_limits
         }
 
@@ -82,8 +81,7 @@ defmodule SymphonyElixirWeb.Presenter do
       running: running && running_issue_payload(running),
       retry: retry && retry_issue_payload(retry),
       logs: %{
-        worker_session_logs: [],
-        codex_session_logs: []
+        worker_session_logs: []
       },
       recent_events: (running && recent_events_payload(running)) || [],
       last_error: retry && retry.error,
@@ -111,14 +109,14 @@ defmodule SymphonyElixirWeb.Presenter do
       workspace_path: Map.get(entry, :workspace_path),
       session_id: entry.session_id,
       turn_count: Map.get(entry, :turn_count, 0),
-      last_event: entry.last_codex_event,
-      last_message: summarize_message(entry.last_codex_message),
+      last_event: entry.last_worker_event,
+      last_message: summarize_message(entry.last_worker_message),
       started_at: iso8601(entry.started_at),
-      last_event_at: iso8601(entry.last_codex_timestamp),
+      last_event_at: iso8601(entry.last_worker_timestamp),
       tokens: %{
-        input_tokens: entry.codex_input_tokens,
-        output_tokens: entry.codex_output_tokens,
-        total_tokens: entry.codex_total_tokens
+        input_tokens: entry.worker_input_tokens,
+        output_tokens: entry.worker_output_tokens,
+        total_tokens: entry.worker_total_tokens
       }
     }
     |> maybe_put(:session_file, Map.get(entry, :session_file))
@@ -172,13 +170,13 @@ defmodule SymphonyElixirWeb.Presenter do
       turn_count: Map.get(running, :turn_count, 0),
       state: running.state,
       started_at: iso8601(running.started_at),
-      last_event: running.last_codex_event,
-      last_message: summarize_message(running.last_codex_message),
-      last_event_at: iso8601(running.last_codex_timestamp),
+      last_event: running.last_worker_event,
+      last_message: summarize_message(running.last_worker_message),
+      last_event_at: iso8601(running.last_worker_timestamp),
       tokens: %{
-        input_tokens: running.codex_input_tokens,
-        output_tokens: running.codex_output_tokens,
-        total_tokens: running.codex_total_tokens
+        input_tokens: running.worker_input_tokens,
+        output_tokens: running.worker_output_tokens,
+        total_tokens: running.worker_total_tokens
       }
     }
     |> maybe_put(:session_file, Map.get(running, :session_file))
@@ -212,9 +210,9 @@ defmodule SymphonyElixirWeb.Presenter do
   defp recent_events_payload(running) do
     [
       %{
-        at: iso8601(running.last_codex_timestamp),
-        event: running.last_codex_event,
-        message: summarize_message(running.last_codex_message)
+        at: iso8601(running.last_worker_timestamp),
+        event: running.last_worker_event,
+        message: summarize_message(running.last_worker_message)
       }
     ]
     |> Enum.reject(&is_nil(&1.at))
