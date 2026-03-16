@@ -726,7 +726,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert skipped_issue.blocked_by == [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
   end
 
-  test "todo issue with non-terminal blocker is unblocked when blocker workpad shows post-work phase" do
+  test "todo issue with non-terminal blocker remains blocked even when blocker workpad shows post-work phase" do
+    # blockedBy is strictly enforced: dependents wait until the blocker reaches a
+    # terminal state. Dispatching before the blocker merges would give the dependent
+    # a workspace without the blocker's code on the base branch.
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
@@ -749,7 +752,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       blocked_by: [%{id: "blocker-1", identifier: "MT-2002", state: "In Progress"}]
     }
 
-    assert Orchestrator.should_dispatch_issue_for_test(issue, state, state.tracked)
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state, state.tracked)
   end
 
   test "todo issue with non-terminal blocker remains blocked when blocker has no tracked entry" do
@@ -799,26 +802,9 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state, state.tracked)
   end
 
-  test "blocker_effectively_completed? returns true for post-work phases" do
-    alias SymphonyElixir.Orchestrator.Dispatch
-
-    tracked = %{
-      "a" => %{phase: "waiting_for_checks"},
-      "b" => %{phase: "waiting_for_human"},
-      "c" => %{phase: "ready_to_merge"},
-      "d" => %{phase: "merging"},
-      "e" => %{phase: "implementing"},
-      "f" => %{phase: "rework"}
-    }
-
-    assert Dispatch.blocker_effectively_completed?("a", tracked)
-    assert Dispatch.blocker_effectively_completed?("b", tracked)
-    assert Dispatch.blocker_effectively_completed?("c", tracked)
-    assert Dispatch.blocker_effectively_completed?("d", tracked)
-    refute Dispatch.blocker_effectively_completed?("e", tracked)
-    refute Dispatch.blocker_effectively_completed?("f", tracked)
-    refute Dispatch.blocker_effectively_completed?("missing", tracked)
-  end
+  # blocker_effectively_completed? was removed — blockedBy is now strictly enforced.
+  # Dispatching dependents before the blocker merges would give the dependent a
+  # workspace without the blocker's code. See pi-symphony#37 for context.
 
   test "workspace remove returns error information for missing directory" do
     random_path =

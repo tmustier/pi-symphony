@@ -6,10 +6,12 @@ Run through this before launching a Symphony run to avoid the issues we hit on t
 
 - [ ] Target issues are in **Todo** (not Backlog — Symphony skips Backlog)
 - [ ] All target issues have the **`symphony`** label (required by ownership gate)
-- [ ] **Remove `blockedBy` relationships** between issues that should run in parallel
-  - Symphony's `todo_issue_blocked_by_non_terminal?` gate prevents dispatch of any Todo issue whose blocker is in a non-terminal state
-  - If issue A blocks B, and A gets stuck on any lifecycle gate, B will never dispatch — full pipeline deadlock
-  - Only keep `blockedBy` if you genuinely want serial execution
+- [ ] **Review `blockedBy` relationships** — Symphony strictly respects them
+  - `todo_issue_blocked_by_non_terminal?` prevents dispatch of any Todo issue whose blocker is in a non-terminal state (including In Progress, In Review, etc.)
+  - If issue A blocks B, B will not dispatch until A reaches a terminal state (Done, Closed, Cancelled)
+  - If A gets stuck on any lifecycle gate, B is deadlocked
+  - Remove `blockedBy` links between issues that should run in parallel
+  - Only keep `blockedBy` if you genuinely need serial execution AND are confident the blocker will reach terminal state
 - [ ] Issues have clear descriptions with acceptance criteria
 
 ## 2. Workflow config is correct
@@ -19,8 +21,8 @@ Run through this before launching a Symphony run to avoid the issues we hit on t
 - [ ] `hooks.after_create` clones the right repo
 - [ ] `agent.max_concurrent_agents` is set (sum across instances = your desired total)
 - [ ] `pi.model` and `pi.thinking_level` are what you want
-- [ ] `review.enabled: false` unless review infrastructure is tested
-  - The `tool_unavailable` gate for review blocks issues in `blocked` phase and prevents further dispatch
+- [ ] `review.enabled` can be `true` — the PR resolution fallback to `settings.pr.repo_slug` should prevent `tool_unavailable` cascades
+  - If review still causes `tool_unavailable`, check that `pr.repo_slug` is set correctly and `gh` is authenticated
 - [ ] `workspace.root` directories exist: `mkdir -p ~/code/symphony-workspaces/{project}`
 
 ## 3. Environment

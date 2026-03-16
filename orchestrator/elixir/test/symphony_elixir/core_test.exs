@@ -1283,6 +1283,107 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt == "Retry #2"
   end
 
+  test "prompt builder prepends conflict instructions when phase is rework and mergeability is conflict" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      prompt: "Normal prompt body",
+      pr_base_branch: "main",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    issue = %Issue{
+      identifier: "MT-300",
+      title: "Issue with merge conflict",
+      description: "Conflict scenario",
+      state: "Rework",
+      url: "https://example.org/issues/MT-300",
+      labels: ["symphony"],
+      branch_name: "feature/conflict-branch",
+      comments: [
+        %{
+          id: "wpad-300",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: rework\n  branch: feature/conflict-branch\n  waiting_reason: merge_conflict\n  observation:\n    gates:\n      mergeability: conflict\n```",
+          resolved: false,
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    prompt = PromptBuilder.build_prompt(issue)
+
+    assert prompt =~ "URGENT: Merge Conflict Resolution Required"
+    assert prompt =~ "git rebase origin/main"
+    assert prompt =~ "Normal prompt body"
+  end
+
+  test "prompt builder uses configured base branch in conflict instructions, not hardcoded main" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      prompt: "Normal prompt body",
+      pr_base_branch: "develop",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    issue = %Issue{
+      identifier: "MT-301",
+      title: "Issue with conflict on develop",
+      description: "Non-main base branch",
+      state: "Rework",
+      url: "https://example.org/issues/MT-301",
+      labels: ["symphony"],
+      branch_name: "feature/develop-conflict",
+      comments: [
+        %{
+          id: "wpad-301",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: rework\n  branch: feature/develop-conflict\n  waiting_reason: merge_conflict\n  observation:\n    gates:\n      mergeability: conflict\n```",
+          resolved: false,
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    prompt = PromptBuilder.build_prompt(issue)
+
+    assert prompt =~ "git rebase origin/develop"
+    assert prompt =~ "merged into `develop`"
+    refute prompt =~ "origin/main"
+  end
+
+  test "prompt builder does not prepend conflict instructions for non-conflict rework" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      prompt: "Normal prompt body",
+      pr_base_branch: "main",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad"
+    )
+
+    issue = %Issue{
+      identifier: "MT-302",
+      title: "Normal rework without conflict",
+      description: "Regular rework",
+      state: "Rework",
+      url: "https://example.org/issues/MT-302",
+      labels: ["symphony"],
+      branch_name: "feature/normal-rework",
+      comments: [
+        %{
+          id: "wpad-302",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: rework\n  branch: feature/normal-rework\n  observation:\n    gates:\n      mergeability: pass\n```",
+          resolved: false,
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    prompt = PromptBuilder.build_prompt(issue)
+
+    refute prompt =~ "Merge Conflict Resolution"
+    assert prompt =~ "Normal prompt body"
+  end
+
   test "agent runner keeps workspace after successful codex run" do
     test_root =
       Path.join(

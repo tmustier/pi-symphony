@@ -111,15 +111,11 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   def todo_issue_blocked_by_non_terminal?(
         %Issue{state: issue_state, blocked_by: blockers},
         terminal_states,
-        tracked_issues
+        _tracked_issues
       )
       when is_binary(issue_state) and is_list(blockers) do
     normalize_issue_state(issue_state) == "todo" and
       Enum.any?(blockers, fn
-        %{id: blocker_id, state: blocker_state} when is_binary(blocker_state) ->
-          !terminal_issue_state?(blocker_state, terminal_states) and
-            !blocker_effectively_completed?(blocker_id, tracked_issues)
-
         %{state: blocker_state} when is_binary(blocker_state) ->
           !terminal_issue_state?(blocker_state, terminal_states)
 
@@ -129,32 +125,6 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   end
 
   def todo_issue_blocked_by_non_terminal?(_issue, _terminal_states, _tracked_issues), do: false
-
-  @blocker_completed_phases MapSet.new([
-    "waiting_for_checks",
-    "waiting_for_human",
-    "ready_to_merge",
-    "merging"
-  ])
-
-  @doc """
-  Check if a blocker issue has effectively completed its work based on workpad phase.
-
-  Returns true when the blocker's tracked workpad phase indicates that implementation
-  is done and a PR exists — the issue is just waiting on merge gates.
-  """
-  def blocker_effectively_completed?(blocker_id, tracked_issues)
-      when is_binary(blocker_id) and is_map(tracked_issues) do
-    case Map.get(tracked_issues, blocker_id) do
-      %{phase: phase} when is_binary(phase) ->
-        MapSet.member?(@blocker_completed_phases, phase)
-
-      _ ->
-        false
-    end
-  end
-
-  def blocker_effectively_completed?(_blocker_id, _tracked_issues), do: false
 
   @doc """
   Check if an issue state is terminal.

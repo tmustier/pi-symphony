@@ -67,23 +67,25 @@ defmodule SymphonyElixir.PromptBuilder do
   defp to_solid_value(value) when is_list(value), do: Enum.map(value, &to_solid_value/1)
   defp to_solid_value(value), do: value
 
-  @merge_conflict_instructions """
-  ## URGENT: Merge Conflict Resolution Required
+  defp merge_conflict_instructions(base_branch) do
+    """
+    ## URGENT: Merge Conflict Resolution Required
 
-  The branch for this issue has merge conflicts with the base branch and cannot be merged.
-  A sibling PR was merged into main while this branch was being worked on.
+    The branch for this issue has merge conflicts with the base branch and cannot be merged.
+    A sibling PR was merged into `#{base_branch}` while this branch was being worked on.
 
-  Steps:
-  1. `git fetch origin`
-  2. `git rebase origin/main`
-  3. Resolve any conflicts — prefer the incoming main changes for generated files, fixture data,
-     and lock files; prefer your implementation changes for logic and types
-  4. Run the project's validation/test suite to confirm the rebase is clean
-  5. `git push --force-with-lease`
+    Steps:
+    1. `git fetch origin`
+    2. `git rebase origin/#{base_branch}`
+    3. Resolve any conflicts — prefer the incoming #{base_branch} changes for generated files, fixture data,
+       and lock files; prefer your implementation changes for logic and types
+    4. Run the project's validation/test suite to confirm the rebase is clean
+    5. `git push --force-with-lease`
 
-  Do NOT create a new PR — the existing PR will update automatically when you push.
-  Focus only on resolving the conflicts and validating the result.
-  """
+    Do NOT create a new PR — the existing PR will update automatically when you push.
+    Focus only on resolving the conflicts and validating the result.
+    """
+  end
 
   defp maybe_prepend_conflict_instructions(prompt, issue, settings) do
     runtime = OrchestrationPolicy.issue_runtime(issue, settings)
@@ -91,7 +93,7 @@ defmodule SymphonyElixir.PromptBuilder do
     mergeability = Map.get(observation, "gates", %{}) |> Map.get("mergeability")
 
     if runtime.phase == "rework" and mergeability == "conflict" do
-      @merge_conflict_instructions <> "\n" <> prompt
+      merge_conflict_instructions(settings.pr.base_branch) <> "\n" <> prompt
     else
       prompt
     end

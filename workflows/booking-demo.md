@@ -23,6 +23,7 @@ workspace:
 hooks:
   after_create: |
     git clone --depth 1 git@github.com:Nexcade/booking-demo.git .
+  timeout_ms: 60000
 worker:
   runtime: pi
 agent:
@@ -77,8 +78,6 @@ review:
     - P2
 merge:
   mode: disabled
-hooks:
-  timeout_ms: 60000
 observability:
   dashboard_enabled: true
   refresh_ms: 1000
