@@ -5,7 +5,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   use GenServer
   require Logger
-  import Bitwise, only: [<<<: 2]
 
   alias SymphonyElixir.{
     AgentRunner,
@@ -18,9 +17,8 @@ defmodule SymphonyElixir.Orchestrator do
   }
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Orchestrator.{Dispatch, Metrics, Retry}
 
-  @continuation_retry_delay_ms 1_000
-  @failure_retry_base_ms 10_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @empty_worker_totals %{
@@ -152,9 +150,9 @@ defmodule SymphonyElixir.Orchestrator do
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
-              next_attempt = next_retry_attempt_from_running(running_entry)
+              next_attempt = Retry.next_retry_attempt_from_running(running_entry)
 
-              schedule_issue_retry(
+              Retry.schedule_issue_retry(
                 state,
                 issue_id,
                 next_attempt,
@@ -165,7 +163,7 @@ defmodule SymphonyElixir.Orchestrator do
                     worker_host: Map.get(running_entry, :worker_host),
                     workspace_path: Map.get(running_entry, :workspace_path)
                   },
-                  retry_runtime_metadata(running_entry)
+                  Retry.retry_runtime_metadata(running_entry)
                 )
               )
           end
@@ -210,7 +208,7 @@ defmodule SymphonyElixir.Orchestrator do
         {:noreply, state}
 
       running_entry ->
-        {updated_running_entry, token_delta} = integrate_worker_update(running_entry, update)
+        {updated_running_entry, token_delta} = Metrics.integrate_worker_update(running_entry, update)
 
         state =
           state
@@ -226,7 +224,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info({:retry_issue, issue_id, retry_token}, state) do
     result =
-      case pop_retry_attempt_state(state, issue_id, retry_token) do
+      case Retry.pop_retry_attempt_state(state, issue_id, retry_token) do
         {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
         :missing -> {:noreply, state}
       end
@@ -250,7 +248,7 @@ defmodule SymphonyElixir.Orchestrator do
       issues = reconcile_candidate_issue_lifecycles(issues, state)
       state = update_tracked_issues(state, issues)
 
-      if available_slots(state) > 0 do
+      if Dispatch.available_slots(state) > 0 do
         choose_issues(issues, state)
       else
         state
@@ -353,8 +351,8 @@ defmodule SymphonyElixir.Orchestrator do
           issues
           |> reconcile_running_issue_states(
             state,
-            active_state_set(),
-            terminal_state_set()
+            Dispatch.active_state_set(),
+            Dispatch.terminal_state_set()
           )
           |> reconcile_missing_running_issue_ids(running_ids, issues)
 
@@ -369,17 +367,17 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec reconcile_issue_states_for_test([Issue.t()], term()) :: term()
   def reconcile_issue_states_for_test(issues, %State{} = state) when is_list(issues) do
-    reconcile_running_issue_states(issues, state, active_state_set(), terminal_state_set())
+    reconcile_running_issue_states(issues, state, Dispatch.active_state_set(), Dispatch.terminal_state_set())
   end
 
   def reconcile_issue_states_for_test(issues, state) when is_list(issues) do
-    reconcile_running_issue_states(issues, state, active_state_set(), terminal_state_set())
+    reconcile_running_issue_states(issues, state, Dispatch.active_state_set(), Dispatch.terminal_state_set())
   end
 
   @doc false
   @spec should_dispatch_issue_for_test(Issue.t(), term()) :: boolean()
   def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state) do
-    should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set())
+    Dispatch.should_dispatch_issue?(issue, state, Dispatch.active_state_set(), Dispatch.terminal_state_set())
   end
 
   @doc false
@@ -387,19 +385,19 @@ defmodule SymphonyElixir.Orchestrator do
           {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
   def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
       when is_function(issue_fetcher, 1) do
-    revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set())
+    Dispatch.revalidate_issue_for_dispatch(issue, issue_fetcher, Dispatch.terminal_state_set())
   end
 
   @doc false
   @spec sort_issues_for_dispatch_for_test([Issue.t()]) :: [Issue.t()]
   def sort_issues_for_dispatch_for_test(issues) when is_list(issues) do
-    sort_issues_for_dispatch(issues)
+    Dispatch.sort_issues_for_dispatch(issues)
   end
 
   @doc false
   @spec select_worker_host_for_test(term(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
   def select_worker_host_for_test(%State{} = state, preferred_worker_host) do
-    select_worker_host(state, preferred_worker_host)
+    Dispatch.select_worker_host(state, preferred_worker_host)
   end
 
   @doc false
@@ -425,22 +423,22 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp reconcile_issue_state(%Issue{} = issue, state, active_states, terminal_states) do
     cond do
-      terminal_issue_state?(issue.state, terminal_states) ->
+      Dispatch.terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue moved to terminal state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
         terminate_running_issue(state, issue.id, true)
 
-      !issue_routable_to_worker?(issue) ->
+      !Dispatch.issue_routable_to_worker?(issue) ->
         Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
 
         terminate_running_issue(state, issue.id, false)
 
-      active_issue_state?(issue.state, active_states) and not dispatch_allowed_by_policy?(issue) ->
+      Dispatch.active_issue_state?(issue.state, active_states) and not Dispatch.dispatch_allowed_by_policy?(issue) ->
         Logger.info("Issue failed orchestration policy gates: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
         terminate_running_issue(state, issue.id, false)
 
-      active_issue_state?(issue.state, active_states) ->
+      Dispatch.active_issue_state?(issue.state, active_states) ->
         refresh_running_issue_state(state, issue)
 
       true ->
@@ -557,11 +555,11 @@ defmodule SymphonyElixir.Orchestrator do
 
       Logger.warning("Issue stalled: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} elapsed_ms=#{elapsed_ms}; restarting with backoff")
 
-      next_attempt = next_retry_attempt_from_running(running_entry)
+      next_attempt = Retry.next_retry_attempt_from_running(running_entry)
 
       state
       |> terminate_running_issue(issue_id, false)
-      |> schedule_issue_retry(
+      |> Retry.schedule_issue_retry(
         issue_id,
         next_attempt,
         Map.merge(
@@ -569,7 +567,7 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: identifier,
             error: "stalled for #{elapsed_ms}ms without codex activity"
           },
-          retry_runtime_metadata(running_entry)
+          Retry.retry_runtime_metadata(running_entry)
         )
       )
     else
@@ -625,13 +623,13 @@ defmodule SymphonyElixir.Orchestrator do
   defp terminate_task(_pid), do: :ok
 
   defp choose_issues(issues, state) do
-    active_states = active_state_set()
-    terminal_states = terminal_state_set()
+    active_states = Dispatch.active_state_set()
+    terminal_states = Dispatch.terminal_state_set()
 
     issues
-    |> sort_issues_for_dispatch()
+    |> Dispatch.sort_issues_for_dispatch()
     |> Enum.reduce(state, fn issue, state_acc ->
-      if should_dispatch_issue?(issue, state_acc, active_states, terminal_states) do
+      if Dispatch.should_dispatch_issue?(issue, state_acc, active_states, terminal_states) do
         dispatch_issue(state_acc, issue)
       else
         state_acc
@@ -639,149 +637,10 @@ defmodule SymphonyElixir.Orchestrator do
     end)
   end
 
-  defp sort_issues_for_dispatch(issues) when is_list(issues) do
-    Enum.sort_by(issues, fn
-      %Issue{} = issue ->
-        {priority_rank(issue.priority), issue_created_at_sort_key(issue), issue.identifier || issue.id || ""}
 
-      _ ->
-        {priority_rank(nil), issue_created_at_sort_key(nil), ""}
-    end)
-  end
-
-  defp priority_rank(priority) when is_integer(priority) and priority in 1..4, do: priority
-  defp priority_rank(_priority), do: 5
-
-  defp issue_created_at_sort_key(%Issue{created_at: %DateTime{} = created_at}) do
-    DateTime.to_unix(created_at, :microsecond)
-  end
-
-  defp issue_created_at_sort_key(%Issue{}), do: 9_223_372_036_854_775_807
-  defp issue_created_at_sort_key(_issue), do: 9_223_372_036_854_775_807
-
-  defp should_dispatch_issue?(
-         %Issue{} = issue,
-         %State{running: running, claimed: claimed} = state,
-         active_states,
-         terminal_states
-       ) do
-    candidate_issue?(issue, active_states, terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
-      !MapSet.member?(claimed, issue.id) and
-      !Map.has_key?(running, issue.id) and
-      available_slots(state) > 0 and
-      state_slots_available?(issue, running) and
-      worker_slots_available?(state)
-  end
-
-  defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
-
-  defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
-    limit = Config.max_concurrent_agents_for_state(issue_state)
-    used = running_issue_count_for_state(running, issue_state)
-    limit > used
-  end
-
-  defp state_slots_available?(_issue, _running), do: false
-
-  defp running_issue_count_for_state(running, issue_state) when is_map(running) do
-    normalized_state = normalize_issue_state(issue_state)
-
-    Enum.count(running, fn
-      {_id, %{issue: %Issue{state: state_name}}} ->
-        normalize_issue_state(state_name) == normalized_state
-
-      _ ->
-        false
-    end)
-  end
-
-  defp candidate_issue?(
-         %Issue{
-           id: id,
-           identifier: identifier,
-           title: title,
-           state: state_name
-         } = issue,
-         active_states,
-         terminal_states
-       )
-       when is_binary(id) and is_binary(identifier) and is_binary(title) and is_binary(state_name) do
-    issue_routable_to_worker?(issue) and
-      active_issue_state?(state_name, active_states) and
-      !terminal_issue_state?(state_name, terminal_states) and
-      dispatch_allowed_by_policy?(issue)
-  end
-
-  defp candidate_issue?(_issue, _active_states, _terminal_states), do: false
-
-  defp dispatch_allowed_by_policy?(%Issue{} = issue) do
-    issue
-    |> OrchestrationPolicy.issue_runtime(Config.settings!())
-    |> Map.get(:dispatch_allowed, true)
-  end
-
-  defp issue_orchestration_phase(%Issue{} = issue) do
-    issue
-    |> OrchestrationPolicy.issue_runtime(Config.settings!())
-    |> Map.get(:phase)
-  rescue
-    _ -> nil
-  end
-
-  defp issue_routable_to_worker?(%Issue{assigned_to_worker: assigned_to_worker})
-       when is_boolean(assigned_to_worker),
-       do: assigned_to_worker
-
-  defp issue_routable_to_worker?(_issue), do: true
-
-  defp todo_issue_blocked_by_non_terminal?(
-         %Issue{state: issue_state, blocked_by: blockers},
-         terminal_states
-       )
-       when is_binary(issue_state) and is_list(blockers) do
-    normalize_issue_state(issue_state) == "todo" and
-      Enum.any?(blockers, fn
-        %{state: blocker_state} when is_binary(blocker_state) ->
-          !terminal_issue_state?(blocker_state, terminal_states)
-
-        _ ->
-          true
-      end)
-  end
-
-  defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
-
-  defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
-    MapSet.member?(terminal_states, normalize_issue_state(state_name))
-  end
-
-  defp terminal_issue_state?(_state_name, _terminal_states), do: false
-
-  defp active_issue_state?(state_name, active_states) when is_binary(state_name) do
-    MapSet.member?(active_states, normalize_issue_state(state_name))
-  end
-
-  defp normalize_issue_state(state_name) when is_binary(state_name) do
-    String.downcase(String.trim(state_name))
-  end
-
-  defp terminal_state_set do
-    Config.settings!().tracker.terminal_states
-    |> Enum.map(&normalize_issue_state/1)
-    |> Enum.filter(&(&1 != ""))
-    |> MapSet.new()
-  end
-
-  defp active_state_set do
-    Config.settings!().tracker.active_states
-    |> Enum.map(&normalize_issue_state/1)
-    |> Enum.filter(&(&1 != ""))
-    |> MapSet.new()
-  end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
-    case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
+    case Dispatch.revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, Dispatch.terminal_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
         do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
 
@@ -803,7 +662,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
     recipient = self()
 
-    case select_worker_host(state, preferred_worker_host) do
+    case Dispatch.select_worker_host(state, preferred_worker_host) do
       :no_worker_capacity ->
         Logger.debug("No SSH worker slots available for #{issue_context(issue)} preferred_worker_host=#{inspect(preferred_worker_host)}")
         state
@@ -842,8 +701,8 @@ defmodule SymphonyElixir.Orchestrator do
             worker_last_reported_output_tokens: 0,
             worker_last_reported_total_tokens: 0,
             turn_count: 0,
-            orchestration_phase: issue_orchestration_phase(issue),
-            retry_attempt: normalize_retry_attempt(attempt),
+            orchestration_phase: Dispatch.issue_orchestration_phase(issue),
+            retry_attempt: Retry.normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now()
           })
 
@@ -858,7 +717,7 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.error("Unable to spawn agent for #{issue_context(issue)}: #{inspect(reason)}")
         next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
 
-        schedule_issue_retry(state, issue.id, next_attempt, %{
+        Retry.schedule_issue_retry(state, issue.id, next_attempt, %{
           identifier: issue.identifier,
           error: "failed to spawn agent: #{inspect(reason)}",
           worker_host: worker_host
@@ -866,25 +725,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
-       when is_binary(issue_id) and is_function(issue_fetcher, 1) do
-    case issue_fetcher.([issue_id]) do
-      {:ok, [%Issue{} = refreshed_issue | _]} ->
-        if retry_candidate_issue?(refreshed_issue, terminal_states) do
-          {:ok, refreshed_issue}
-        else
-          {:skip, refreshed_issue}
-        end
 
-      {:ok, []} ->
-        {:skip, :missing}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
 
   defp complete_issue(%State{} = state, issue_id) do
     %{
@@ -904,14 +745,14 @@ defmodule SymphonyElixir.Orchestrator do
           worker_host: Map.get(running_entry, :worker_host),
           workspace_path: Map.get(running_entry, :workspace_path)
         },
-        retry_runtime_metadata(running_entry)
+        Retry.retry_runtime_metadata(running_entry)
       )
 
     case refresh_issue_for_continuation(issue_id) do
       {:ok, %Issue{} = refreshed_issue} ->
-        if retry_candidate_issue?(refreshed_issue, terminal_state_set()) and
+        if Dispatch.retry_candidate_issue?(refreshed_issue, Dispatch.terminal_state_set()) and
              immediate_continuation_allowed?(refreshed_issue) do
-          schedule_issue_retry(state, issue_id, 1, metadata)
+          Retry.schedule_issue_retry(state, issue_id, 1, metadata)
         else
           release_issue_claim(state, issue_id)
         end
@@ -921,82 +762,13 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, reason} ->
         Logger.debug("Failed to refresh issue for continuation retry issue_id=#{issue_id}: #{inspect(reason)}; preserving prior continuation behavior")
-        schedule_issue_retry(state, issue_id, 1, metadata)
+        Retry.schedule_issue_retry(state, issue_id, 1, metadata)
     end
   end
 
   defp maybe_schedule_continuation_retry(%State{} = state, _issue_id, _running_entry), do: state
 
-  defp schedule_issue_retry(%State{} = state, issue_id, attempt, metadata)
-       when is_binary(issue_id) and is_map(metadata) do
-    previous_retry = Map.get(state.retry_attempts, issue_id, %{attempt: 0})
-    next_attempt = if is_integer(attempt), do: attempt, else: previous_retry.attempt + 1
-    delay_ms = retry_delay(next_attempt, metadata)
-    old_timer = Map.get(previous_retry, :timer_ref)
-    retry_token = make_ref()
-    due_at_ms = System.monotonic_time(:millisecond) + delay_ms
-    identifier = pick_retry_identifier(issue_id, previous_retry, metadata)
-    error = pick_retry_error(previous_retry, metadata)
-    worker_host = pick_retry_worker_host(previous_retry, metadata)
-    workspace_path = pick_retry_workspace_path(previous_retry, metadata)
-    session_file = pick_retry_session_file(previous_retry, metadata)
-    session_dir = pick_retry_session_dir(previous_retry, metadata)
-    proof_dir = pick_retry_proof_dir(previous_retry, metadata)
-    proof_events_path = pick_retry_proof_events_path(previous_retry, metadata)
-    proof_summary_path = pick_retry_proof_summary_path(previous_retry, metadata)
 
-    if is_reference(old_timer) do
-      Process.cancel_timer(old_timer)
-    end
-
-    timer_ref = Process.send_after(self(), {:retry_issue, issue_id, retry_token}, delay_ms)
-
-    error_suffix = if is_binary(error), do: " error=#{error}", else: ""
-
-    Logger.warning("Retrying issue_id=#{issue_id} issue_identifier=#{identifier} in #{delay_ms}ms (attempt #{next_attempt})#{error_suffix}")
-
-    %{
-      state
-      | retry_attempts:
-          Map.put(state.retry_attempts, issue_id, %{
-            attempt: next_attempt,
-            timer_ref: timer_ref,
-            retry_token: retry_token,
-            due_at_ms: due_at_ms,
-            identifier: identifier,
-            error: error,
-            worker_host: worker_host,
-            workspace_path: workspace_path,
-            session_file: session_file,
-            session_dir: session_dir,
-            proof_dir: proof_dir,
-            proof_events_path: proof_events_path,
-            proof_summary_path: proof_summary_path
-          })
-    }
-  end
-
-  defp pop_retry_attempt_state(%State{} = state, issue_id, retry_token) when is_reference(retry_token) do
-    case Map.get(state.retry_attempts, issue_id) do
-      %{attempt: attempt, retry_token: ^retry_token} = retry_entry ->
-        metadata = %{
-          identifier: Map.get(retry_entry, :identifier),
-          error: Map.get(retry_entry, :error),
-          worker_host: Map.get(retry_entry, :worker_host),
-          workspace_path: Map.get(retry_entry, :workspace_path),
-          session_file: Map.get(retry_entry, :session_file),
-          session_dir: Map.get(retry_entry, :session_dir),
-          proof_dir: Map.get(retry_entry, :proof_dir),
-          proof_events_path: Map.get(retry_entry, :proof_events_path),
-          proof_summary_path: Map.get(retry_entry, :proof_summary_path)
-        }
-
-        {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
-
-      _ ->
-        :missing
-    end
-  end
 
   defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata) do
     case Tracker.fetch_candidate_issues() do
@@ -1009,7 +781,7 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.warning("Retry poll failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
 
         {:noreply,
-         schedule_issue_retry(
+         Retry.schedule_issue_retry(
            state,
            issue_id,
            attempt + 1,
@@ -1019,16 +791,16 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
-    terminal_states = terminal_state_set()
+    terminal_states = Dispatch.terminal_state_set()
 
     cond do
-      terminal_issue_state?(issue.state, terminal_states) ->
+      Dispatch.terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue state is terminal: issue_id=#{issue_id} issue_identifier=#{issue.identifier} state=#{issue.state}; removing associated workspace")
 
         cleanup_issue_workspace(issue.identifier, metadata[:worker_host])
         {:noreply, release_issue_claim(state, issue_id)}
 
-      retry_candidate_issue?(issue, terminal_states) ->
+      Dispatch.retry_candidate_issue?(issue, terminal_states) ->
         handle_active_retry(state, issue, attempt, metadata)
 
       true ->
@@ -1081,15 +853,15 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_active_retry(state, issue, attempt, metadata) do
-    if retry_candidate_issue?(issue, terminal_state_set()) and
-         dispatch_slots_available?(issue, state) and
-         worker_slots_available?(state, metadata[:worker_host]) do
+    if Dispatch.retry_candidate_issue?(issue, Dispatch.terminal_state_set()) and
+         Dispatch.dispatch_slots_available?(issue, state) and
+         Dispatch.worker_slots_available?(state, metadata[:worker_host]) do
       {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host])}
     else
       Logger.debug("No available slots for retrying #{issue_context(issue)}; retrying again")
 
       {:noreply,
-       schedule_issue_retry(
+       Retry.schedule_issue_retry(
          state,
          issue.id,
          attempt + 1,
@@ -1105,74 +877,7 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | claimed: MapSet.delete(state.claimed, issue_id)}
   end
 
-  defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
-    if metadata[:delay_type] == :continuation and attempt == 1 do
-      @continuation_retry_delay_ms
-    else
-      failure_retry_delay(attempt)
-    end
-  end
 
-  defp failure_retry_delay(attempt) do
-    max_delay_power = min(attempt - 1, 10)
-    min(@failure_retry_base_ms * (1 <<< max_delay_power), Config.settings!().agent.max_retry_backoff_ms)
-  end
-
-  defp normalize_retry_attempt(attempt) when is_integer(attempt) and attempt > 0, do: attempt
-  defp normalize_retry_attempt(_attempt), do: 0
-
-  defp next_retry_attempt_from_running(running_entry) do
-    case Map.get(running_entry, :retry_attempt) do
-      attempt when is_integer(attempt) and attempt > 0 -> attempt + 1
-      _ -> nil
-    end
-  end
-
-  defp pick_retry_identifier(issue_id, previous_retry, metadata) do
-    metadata[:identifier] || Map.get(previous_retry, :identifier) || issue_id
-  end
-
-  defp pick_retry_error(previous_retry, metadata) do
-    metadata[:error] || Map.get(previous_retry, :error)
-  end
-
-  defp pick_retry_worker_host(previous_retry, metadata) do
-    metadata[:worker_host] || Map.get(previous_retry, :worker_host)
-  end
-
-  defp pick_retry_workspace_path(previous_retry, metadata) do
-    metadata[:workspace_path] || Map.get(previous_retry, :workspace_path)
-  end
-
-  defp pick_retry_session_file(previous_retry, metadata) do
-    metadata[:session_file] || Map.get(previous_retry, :session_file)
-  end
-
-  defp pick_retry_session_dir(previous_retry, metadata) do
-    metadata[:session_dir] || Map.get(previous_retry, :session_dir)
-  end
-
-  defp pick_retry_proof_dir(previous_retry, metadata) do
-    metadata[:proof_dir] || Map.get(previous_retry, :proof_dir)
-  end
-
-  defp pick_retry_proof_events_path(previous_retry, metadata) do
-    metadata[:proof_events_path] || Map.get(previous_retry, :proof_events_path)
-  end
-
-  defp pick_retry_proof_summary_path(previous_retry, metadata) do
-    metadata[:proof_summary_path] || Map.get(previous_retry, :proof_summary_path)
-  end
-
-  defp retry_runtime_metadata(running_entry) when is_map(running_entry) do
-    %{
-      session_file: Map.get(running_entry, :session_file),
-      session_dir: Map.get(running_entry, :session_dir),
-      proof_dir: Map.get(running_entry, :proof_dir),
-      proof_events_path: Map.get(running_entry, :proof_events_path),
-      proof_summary_path: Map.get(running_entry, :proof_summary_path)
-    }
-  end
 
   defp maybe_put_runtime_value(running_entry, _key, nil), do: running_entry
 
@@ -1180,67 +885,7 @@ defmodule SymphonyElixir.Orchestrator do
     Map.put(running_entry, key, value)
   end
 
-  defp select_worker_host(%State{} = state, preferred_worker_host) do
-    case Config.settings!().worker.ssh_hosts do
-      [] ->
-        nil
 
-      hosts ->
-        available_hosts = Enum.filter(hosts, &worker_host_slots_available?(state, &1))
-
-        cond do
-          available_hosts == [] ->
-            :no_worker_capacity
-
-          preferred_worker_host_available?(preferred_worker_host, available_hosts) ->
-            preferred_worker_host
-
-          true ->
-            least_loaded_worker_host(state, available_hosts)
-        end
-    end
-  end
-
-  defp preferred_worker_host_available?(preferred_worker_host, hosts)
-       when is_binary(preferred_worker_host) and is_list(hosts) do
-    preferred_worker_host != "" and preferred_worker_host in hosts
-  end
-
-  defp preferred_worker_host_available?(_preferred_worker_host, _hosts), do: false
-
-  defp least_loaded_worker_host(%State{} = state, hosts) when is_list(hosts) do
-    hosts
-    |> Enum.with_index()
-    |> Enum.min_by(fn {host, index} ->
-      {running_worker_host_count(state.running, host), index}
-    end)
-    |> elem(0)
-  end
-
-  defp running_worker_host_count(running, worker_host) when is_map(running) and is_binary(worker_host) do
-    Enum.count(running, fn
-      {_issue_id, %{worker_host: ^worker_host}} -> true
-      _ -> false
-    end)
-  end
-
-  defp worker_slots_available?(%State{} = state) do
-    select_worker_host(state, nil) != :no_worker_capacity
-  end
-
-  defp worker_slots_available?(%State{} = state, preferred_worker_host) do
-    select_worker_host(state, preferred_worker_host) != :no_worker_capacity
-  end
-
-  defp worker_host_slots_available?(%State{} = state, worker_host) when is_binary(worker_host) do
-    case Config.settings!().worker.max_concurrent_agents_per_host do
-      limit when is_integer(limit) and limit > 0 ->
-        running_worker_host_count(state.running, worker_host) < limit
-
-      _ ->
-        true
-    end
-  end
 
   defp find_issue_by_id(issues, issue_id) when is_binary(issue_id) do
     Enum.find(issues, fn
@@ -1268,13 +913,7 @@ defmodule SymphonyElixir.Orchestrator do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
 
-  defp available_slots(%State{} = state) do
-    max(
-      (state.max_concurrent_agents || Config.settings!().agent.max_concurrent_agents) -
-        map_size(state.running),
-      0
-    )
-  end
+
 
   @spec request_refresh() :: map() | :unavailable
   def request_refresh do
@@ -1337,7 +976,7 @@ defmodule SymphonyElixir.Orchestrator do
           last_worker_timestamp: Map.get(metadata, :last_worker_timestamp),
           last_worker_message: Map.get(metadata, :last_worker_message),
           last_worker_event: Map.get(metadata, :last_worker_event),
-          runtime_seconds: running_seconds(Map.get(metadata, :started_at), now)
+          runtime_seconds: Metrics.running_seconds(Map.get(metadata, :started_at), now)
         }
       end)
 
@@ -1395,79 +1034,7 @@ defmodule SymphonyElixir.Orchestrator do
      }, state}
   end
 
-  defp integrate_worker_update(running_entry, %{event: event, timestamp: timestamp} = update) do
-    token_delta = extract_token_delta(running_entry, update)
-    worker_input_tokens = Map.get(running_entry, :worker_input_tokens, 0)
-    worker_output_tokens = Map.get(running_entry, :worker_output_tokens, 0)
-    worker_total_tokens = Map.get(running_entry, :worker_total_tokens, 0)
-    worker_pid = Map.get(running_entry, :worker_pid)
-    last_reported_input = Map.get(running_entry, :worker_last_reported_input_tokens, 0)
-    last_reported_output = Map.get(running_entry, :worker_last_reported_output_tokens, 0)
-    last_reported_total = Map.get(running_entry, :worker_last_reported_total_tokens, 0)
-    turn_count = Map.get(running_entry, :turn_count, 0)
 
-    {
-      Map.merge(running_entry, %{
-        last_worker_timestamp: timestamp,
-        last_worker_message: summarize_worker_update(update),
-        session_id: session_id_for_update(running_entry.session_id, update),
-        last_worker_event: event,
-        worker_pid: worker_pid_for_update(worker_pid, update),
-        worker_input_tokens: worker_input_tokens + token_delta.input_tokens,
-        worker_output_tokens: worker_output_tokens + token_delta.output_tokens,
-        worker_total_tokens: worker_total_tokens + token_delta.total_tokens,
-        worker_last_reported_input_tokens: max(last_reported_input, token_delta.input_reported),
-        worker_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
-        worker_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
-        turn_count: turn_count_for_update(turn_count, running_entry.session_id, update)
-      }),
-      token_delta
-    }
-  end
-
-  defp worker_pid_for_update(_existing, %{worker_pid: pid})
-       when is_binary(pid),
-       do: pid
-
-  defp worker_pid_for_update(_existing, %{worker_pid: pid})
-       when is_integer(pid),
-       do: Integer.to_string(pid)
-
-  defp worker_pid_for_update(_existing, %{worker_pid: pid}) when is_list(pid),
-    do: to_string(pid)
-
-  defp worker_pid_for_update(existing, _update), do: existing
-
-  defp session_id_for_update(_existing, %{session_id: session_id}) when is_binary(session_id),
-    do: session_id
-
-  defp session_id_for_update(existing, _update), do: existing
-
-  defp turn_count_for_update(existing_count, existing_session_id, %{
-         event: :session_started,
-         session_id: session_id
-       })
-       when is_integer(existing_count) and is_binary(session_id) do
-    if session_id == existing_session_id do
-      existing_count
-    else
-      existing_count + 1
-    end
-  end
-
-  defp turn_count_for_update(existing_count, _existing_session_id, _update)
-       when is_integer(existing_count),
-       do: existing_count
-
-  defp turn_count_for_update(_existing_count, _existing_session_id, _update), do: 0
-
-  defp summarize_worker_update(update) do
-    %{
-      event: update[:event],
-      message: update[:payload] || update[:raw],
-      timestamp: update[:timestamp]
-    }
-  end
 
   defp schedule_tick(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do
     if is_reference(state.tick_timer_ref) do
@@ -1501,10 +1068,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp record_session_completion_totals(state, running_entry) when is_map(running_entry) do
-    runtime_seconds = running_seconds(running_entry.started_at, DateTime.utc_now())
+    runtime_seconds = Metrics.running_seconds(running_entry.started_at, DateTime.utc_now())
 
     worker_totals =
-      apply_token_delta(
+      Metrics.apply_token_delta(
         state.worker_totals,
         %{
           input_tokens: 0,
@@ -1529,10 +1096,7 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
-    candidate_issue?(issue, active_state_set(), terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
-  end
+
 
   defp refresh_issue_for_continuation(issue_id) when is_binary(issue_id) do
     case Tracker.fetch_issue_states_by_ids([issue_id]) do
@@ -1581,22 +1145,20 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp update_tracked_issue(state, _issue), do: state
 
-  defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
-    available_slots(state) > 0 and state_slots_available?(issue, state.running)
-  end
+
 
   defp apply_worker_token_delta(
          %{worker_totals: worker_totals} = state,
          %{input_tokens: input, output_tokens: output, total_tokens: total} = token_delta
        )
        when is_integer(input) and is_integer(output) and is_integer(total) do
-    %{state | worker_totals: apply_token_delta(worker_totals, token_delta)}
+    %{state | worker_totals: Metrics.apply_token_delta(worker_totals, token_delta)}
   end
 
   defp apply_worker_token_delta(state, _token_delta), do: state
 
   defp apply_worker_rate_limits(%State{} = state, update) when is_map(update) do
-    case extract_rate_limits(update) do
+    case Metrics.extract_rate_limits(update) do
       %{} = rate_limits ->
         %{state | worker_rate_limits: rate_limits}
 
@@ -1607,322 +1169,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp apply_worker_rate_limits(state, _update), do: state
 
-  defp apply_token_delta(worker_totals, token_delta) do
-    input_tokens = Map.get(worker_totals, :input_tokens, 0) + token_delta.input_tokens
-    output_tokens = Map.get(worker_totals, :output_tokens, 0) + token_delta.output_tokens
-    total_tokens = Map.get(worker_totals, :total_tokens, 0) + token_delta.total_tokens
 
-    seconds_running =
-      Map.get(worker_totals, :seconds_running, 0) + Map.get(token_delta, :seconds_running, 0)
 
-    %{
-      input_tokens: max(0, input_tokens),
-      output_tokens: max(0, output_tokens),
-      total_tokens: max(0, total_tokens),
-      seconds_running: max(0, seconds_running)
-    }
-  end
 
-  defp extract_token_delta(running_entry, %{event: _, timestamp: _} = update) do
-    running_entry = running_entry || %{}
-    usage = extract_token_usage(update)
-
-    {
-      compute_token_delta(
-        running_entry,
-        :input,
-        usage,
-        :worker_last_reported_input_tokens
-      ),
-      compute_token_delta(
-        running_entry,
-        :output,
-        usage,
-        :worker_last_reported_output_tokens
-      ),
-      compute_token_delta(
-        running_entry,
-        :total,
-        usage,
-        :worker_last_reported_total_tokens
-      )
-    }
-    |> Tuple.to_list()
-    |> then(fn [input, output, total] ->
-      %{
-        input_tokens: input.delta,
-        output_tokens: output.delta,
-        total_tokens: total.delta,
-        input_reported: input.reported,
-        output_reported: output.reported,
-        total_reported: total.reported
-      }
-    end)
-  end
-
-  defp compute_token_delta(running_entry, token_key, usage, reported_key) do
-    next_total = get_token_usage(usage, token_key)
-    prev_reported = Map.get(running_entry, reported_key, 0)
-
-    delta =
-      if is_integer(next_total) and next_total >= prev_reported do
-        next_total - prev_reported
-      else
-        0
-      end
-
-    %{
-      delta: max(delta, 0),
-      reported: if(is_integer(next_total), do: next_total, else: prev_reported)
-    }
-  end
-
-  defp extract_token_usage(update) do
-    payloads = [
-      update[:usage],
-      Map.get(update, "usage"),
-      Map.get(update, :usage),
-      update[:payload],
-      Map.get(update, "payload"),
-      update
-    ]
-
-    Enum.find_value(payloads, &absolute_token_usage_from_payload/1) ||
-      Enum.find_value(payloads, &turn_completed_usage_from_payload/1) ||
-      %{}
-  end
-
-  defp extract_rate_limits(update) do
-    rate_limits_from_payload(update[:rate_limits]) ||
-      rate_limits_from_payload(Map.get(update, "rate_limits")) ||
-      rate_limits_from_payload(Map.get(update, :rate_limits)) ||
-      rate_limits_from_payload(update[:payload]) ||
-      rate_limits_from_payload(Map.get(update, "payload")) ||
-      rate_limits_from_payload(update)
-  end
-
-  defp absolute_token_usage_from_payload(payload) when is_map(payload) do
-    absolute_paths = [
-      ["params", "msg", "payload", "info", "total_token_usage"],
-      [:params, :msg, :payload, :info, :total_token_usage],
-      ["params", "msg", "info", "total_token_usage"],
-      [:params, :msg, :info, :total_token_usage],
-      ["params", "tokenUsage", "total"],
-      [:params, :tokenUsage, :total],
-      ["tokenUsage", "total"],
-      [:tokenUsage, :total]
-    ]
-
-    explicit_map_at_paths(payload, absolute_paths)
-  end
-
-  defp absolute_token_usage_from_payload(_payload), do: nil
-
-  defp turn_completed_usage_from_payload(payload) when is_map(payload) do
-    method = Map.get(payload, "method") || Map.get(payload, :method)
-
-    if method in ["turn/completed", :turn_completed] do
-      direct =
-        Map.get(payload, "usage") ||
-          Map.get(payload, :usage) ||
-          map_at_path(payload, ["params", "usage"]) ||
-          map_at_path(payload, [:params, :usage])
-
-      if is_map(direct) and integer_token_map?(direct), do: direct
-    end
-  end
-
-  defp turn_completed_usage_from_payload(_payload), do: nil
-
-  defp rate_limits_from_payload(payload) when is_map(payload) do
-    direct = Map.get(payload, "rate_limits") || Map.get(payload, :rate_limits)
-
-    cond do
-      rate_limits_map?(direct) ->
-        direct
-
-      rate_limits_map?(payload) ->
-        payload
-
-      true ->
-        rate_limit_payloads(payload)
-    end
-  end
-
-  defp rate_limits_from_payload(payload) when is_list(payload) do
-    rate_limit_payloads(payload)
-  end
-
-  defp rate_limits_from_payload(_payload), do: nil
-
-  defp rate_limit_payloads(payload) when is_map(payload) do
-    Map.values(payload)
-    |> Enum.reduce_while(nil, fn
-      value, nil ->
-        case rate_limits_from_payload(value) do
-          nil -> {:cont, nil}
-          rate_limits -> {:halt, rate_limits}
-        end
-
-      _value, result ->
-        {:halt, result}
-    end)
-  end
-
-  defp rate_limit_payloads(payload) when is_list(payload) do
-    payload
-    |> Enum.reduce_while(nil, fn
-      value, nil ->
-        case rate_limits_from_payload(value) do
-          nil -> {:cont, nil}
-          rate_limits -> {:halt, rate_limits}
-        end
-
-      _value, result ->
-        {:halt, result}
-    end)
-  end
-
-  defp rate_limits_map?(payload) when is_map(payload) do
-    limit_id =
-      Map.get(payload, "limit_id") ||
-        Map.get(payload, :limit_id) ||
-        Map.get(payload, "limit_name") ||
-        Map.get(payload, :limit_name)
-
-    has_buckets =
-      Enum.any?(
-        ["primary", :primary, "secondary", :secondary, "credits", :credits],
-        &Map.has_key?(payload, &1)
-      )
-
-    !is_nil(limit_id) and has_buckets
-  end
-
-  defp rate_limits_map?(_payload), do: false
-
-  defp explicit_map_at_paths(payload, paths) when is_map(payload) and is_list(paths) do
-    Enum.find_value(paths, fn path ->
-      value = map_at_path(payload, path)
-
-      if is_map(value) and integer_token_map?(value), do: value
-    end)
-  end
-
-  defp explicit_map_at_paths(_payload, _paths), do: nil
-
-  defp map_at_path(payload, path) when is_map(payload) and is_list(path) do
-    Enum.reduce_while(path, payload, fn key, acc ->
-      if is_map(acc) and Map.has_key?(acc, key) do
-        {:cont, Map.get(acc, key)}
-      else
-        {:halt, nil}
-      end
-    end)
-  end
-
-  defp map_at_path(_payload, _path), do: nil
-
-  defp integer_token_map?(payload) do
-    token_fields = [
-      :input_tokens,
-      :output_tokens,
-      :total_tokens,
-      :prompt_tokens,
-      :completion_tokens,
-      :inputTokens,
-      :outputTokens,
-      :totalTokens,
-      :promptTokens,
-      :completionTokens,
-      "input_tokens",
-      "output_tokens",
-      "total_tokens",
-      "prompt_tokens",
-      "completion_tokens",
-      "inputTokens",
-      "outputTokens",
-      "totalTokens",
-      "promptTokens",
-      "completionTokens"
-    ]
-
-    token_fields
-    |> Enum.any?(fn field ->
-      value = payload_get(payload, field)
-      !is_nil(integer_like(value))
-    end)
-  end
-
-  defp get_token_usage(usage, :input),
-    do:
-      payload_get(usage, [
-        "input_tokens",
-        "prompt_tokens",
-        :input_tokens,
-        :prompt_tokens,
-        :input,
-        "promptTokens",
-        :promptTokens,
-        "inputTokens",
-        :inputTokens
-      ])
-
-  defp get_token_usage(usage, :output),
-    do:
-      payload_get(usage, [
-        "output_tokens",
-        "completion_tokens",
-        :output_tokens,
-        :completion_tokens,
-        :output,
-        :completion,
-        "outputTokens",
-        :outputTokens,
-        "completionTokens",
-        :completionTokens
-      ])
-
-  defp get_token_usage(usage, :total),
-    do:
-      payload_get(usage, [
-        "total_tokens",
-        "total",
-        :total_tokens,
-        :total,
-        "totalTokens",
-        :totalTokens
-      ])
-
-  defp payload_get(payload, fields) when is_list(fields) do
-    Enum.find_value(fields, fn field -> map_integer_value(payload, field) end)
-  end
-
-  defp payload_get(payload, field), do: map_integer_value(payload, field)
-
-  defp map_integer_value(payload, field) do
-    if is_map(payload) do
-      value = Map.get(payload, field)
-      integer_like(value)
-    else
-      nil
-    end
-  end
-
-  defp running_seconds(%DateTime{} = started_at, %DateTime{} = now) do
-    max(0, DateTime.diff(now, started_at, :second))
-  end
-
-  defp running_seconds(_started_at, _now), do: 0
-
-  defp integer_like(value) when is_integer(value) and value >= 0, do: value
-
-  defp integer_like(value) when is_binary(value) do
-    case Integer.parse(String.trim(value)) do
-      {num, _} when num >= 0 -> num
-      _ -> nil
-    end
-  end
-
-  defp integer_like(_value), do: nil
 end
