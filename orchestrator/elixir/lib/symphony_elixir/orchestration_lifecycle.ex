@@ -1161,6 +1161,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_phase_after_observation(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "blocked"
+      merge_conflict?(pr_state) -> "rework"
       mergeability_ready?(pr_state) != true -> "waiting_for_checks"
       checks_ready?(pr_state, settings) != true -> "waiting_for_checks"
       review_ready?(review_status, settings) != true -> "waiting_for_checks"
@@ -1173,6 +1174,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_waiting_reason(issue, _runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "missing_context"
+      merge_conflict?(pr_state) -> "merge_conflict"
       mergeability_gate(pr_state) == "blocked" -> "mergeability_changed"
       true -> passive_readiness_waiting_reason(issue, pr_state, review_status, settings)
     end
@@ -1191,6 +1193,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_next_action(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> non_open_pr_next_action(pr_state)
+      merge_conflict?(pr_state) -> "rebase_onto_base_branch"
       mergeability_gate(pr_state) == "blocked" -> "repair_mergeability"
       mergeability_ready?(pr_state) != true -> "poll_on_next_cycle"
       true -> passive_readiness_next_action(issue, runtime, pr_state, review_status, settings)
@@ -1251,13 +1254,15 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     cond do
       state in ["MERGED", "CLOSED"] -> "blocked"
       draft? == true -> "blocked"
-      mergeable == "CONFLICTING" -> "blocked"
+      mergeable == "CONFLICTING" -> "conflict"
       merge_state_status in ["DIRTY", "BLOCKED", "DRAFT"] -> "blocked"
       mergeable == "MERGEABLE" -> "pass"
       merge_state_status in ["CLEAN", "UNSTABLE", "HAS_HOOKS"] -> "pass"
       true -> "unknown"
     end
   end
+
+  defp merge_conflict?(pr_state), do: mergeability_gate(pr_state) == "conflict"
 
   defp mergeability_ready?(pr_state), do: mergeability_gate(pr_state) == "pass"
 
