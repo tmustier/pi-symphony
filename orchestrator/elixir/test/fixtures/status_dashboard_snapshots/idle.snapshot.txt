@@ -5,6 +5,7 @@
 \e[1m│ Tokens: \e[0m\e[33min 0\e[0m\e[90m | \e[0m\e[33mout 0\e[0m\e[90m | \e[0m\e[33mtotal 0\e[0m
 \e[1m│ Rate Limits: \e[0m\e[90munavailable\e[0m
 \e[1m│ Rollout: \e[0m\e[33mmutate\e[0m
+\e[1m│ Model: \e[0m\e[90mdefault\e[0m
 \e[1m│ Project: \e[0m\e[36mhttps://linear.app/project/project/issues\e[0m
 \e[1m│ Next refresh: \e[0m\e[90mn/a\e[0m
 \e[1m├─ Running\e[0m

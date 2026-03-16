@@ -63,6 +63,8 @@ defmodule SymphonyElixir.Orchestrator do
     now_ms = System.monotonic_time(:millisecond)
     config = Config.settings!()
 
+    log_startup_config(config)
+
     state = %State{
       poll_interval_ms: config.polling.interval_ms,
       max_concurrent_agents: config.agent.max_concurrent_agents,
@@ -829,6 +831,23 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
+
+  defp log_startup_config(config) do
+    model_display =
+      case config.pi.model do
+        %{provider: provider, model_id: model_id}
+        when is_binary(provider) and is_binary(model_id) ->
+          thinking = config.pi.thinking_level
+          base = "#{provider}/#{model_id}"
+          if is_binary(thinking), do: "#{base} (thinking: #{thinking})", else: base
+
+        _ ->
+          "default"
+      end
+
+    Logger.info("Symphony starting with model: #{model_display}")
+    Logger.info("Symphony rollout mode: #{config.rollout.mode}")
+  end
 
   defp run_terminal_workspace_cleanup do
     if Config.settings!().rollout.mode == "observe" do
