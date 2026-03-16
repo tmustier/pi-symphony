@@ -3,7 +3,8 @@ defmodule SymphonyElixir.PullRequests do
   Resolves and publishes branch pull requests through the GitHub CLI.
   """
 
-  alias SymphonyElixir.{Config, Linear.Issue, MapUtils}
+  alias SymphonyElixir.{Config, Linear.Issue}
+  import SymphonyElixir.MapUtils, only: [pick_string: 1]
 
   @merge_confirmation_retry_delay_ms 3_000
 
@@ -621,16 +622,16 @@ defmodule SymphonyElixir.PullRequests do
 
   defp branch_context(issue, git_state, settings, opts) do
     %{
-      branch: pick_optional_string([Map.get(git_state, :branch), issue.branch_name]),
-      head_sha: pick_optional_string([Map.get(git_state, :head_sha)]),
-      repo_slug: pick_optional_string([Keyword.get(opts, :repo_slug), Map.get(git_state, :repo_slug)]),
+      branch: pick_string([Map.get(git_state, :branch), issue.branch_name]),
+      head_sha: pick_string([Map.get(git_state, :head_sha)]),
+      repo_slug: pick_string([Keyword.get(opts, :repo_slug), Map.get(git_state, :repo_slug)]),
       base_branch: settings.pr.base_branch,
       remote_branch_published: Map.get(git_state, :remote_branch_published) == true
     }
   end
 
   defp inspect_pr_context(pr_context, settings, opts) do
-    url = pick_optional_string([Map.get(pr_context, :url), Map.get(pr_context, "url")])
+    url = pick_string([Map.get(pr_context, :url), Map.get(pr_context, "url")])
 
     %{
       pr_number:
@@ -640,14 +641,14 @@ defmodule SymphonyElixir.PullRequests do
             pr_number_from_pr_url(url)
         ),
       repo_slug:
-        pick_optional_string([
+        pick_string([
           Keyword.get(opts, :repo_slug),
           Map.get(pr_context, :repo_slug),
           Map.get(pr_context, "repo_slug"),
           repo_slug_from_pr_url(url)
         ]),
       url: url,
-      marker: pick_optional_string([settings.pr.review_comment_marker]) || "<!-- symphony-review -->"
+      marker: pick_string([settings.pr.review_comment_marker]) || "<!-- symphony-review -->"
     }
   end
 
@@ -671,15 +672,15 @@ defmodule SymphonyElixir.PullRequests do
       repo_slug: inspect_context.repo_slug,
       url: inspect_context.url,
       expected_head_sha:
-        pick_optional_string([
+        pick_string([
           Keyword.get(opts, :expected_head_sha),
           Map.get(pr_context, :expected_head_sha),
           Map.get(pr_context, "expected_head_sha"),
           Map.get(pr_context, :head_sha),
           Map.get(pr_context, "head_sha")
         ]),
-      executor: pick_optional_string([settings.merge.executor]) || "gh",
-      method: pick_optional_string([settings.merge.method]) || "squash"
+      executor: pick_string([settings.merge.executor]) || "gh",
+      method: pick_string([settings.merge.method]) || "squash"
     }
   end
 
@@ -792,9 +793,9 @@ defmodule SymphonyElixir.PullRequests do
       head_branch: pr["headRefName"],
       head_sha: pr["headRefOid"],
       base_branch: pr["baseRefName"],
-      merge_state_status: pick_optional_string([pr["mergeStateStatus"]]),
-      mergeable: pick_optional_string([pr["mergeable"]]),
-      review_decision: pick_optional_string([pr["reviewDecision"]]),
+      merge_state_status: pick_string([pr["mergeStateStatus"]]),
+      mergeable: pick_string([pr["mergeable"]]),
+      review_decision: pick_string([pr["reviewDecision"]]),
       merge_commit_sha: merge_commit_sha(pr["mergeCommit"]),
       checks: checks
     }
@@ -825,8 +826,8 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp classify_status_check(%{} = item) do
-    status = pick_optional_string([item["status"], item["state"]]) |> to_status_token()
-    conclusion = pick_optional_string([item["conclusion"]]) |> to_status_token()
+    status = pick_string([item["status"], item["state"]]) |> to_status_token()
+    conclusion = pick_string([item["conclusion"]]) |> to_status_token()
 
     cond do
       status in ["QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "EXPECTED", "WAITING"] ->
@@ -857,7 +858,7 @@ defmodule SymphonyElixir.PullRequests do
   defp to_status_token(nil), do: nil
   defp to_status_token(value) when is_binary(value), do: String.upcase(String.trim(value))
 
-  defp merge_commit_sha(%{"oid" => oid}), do: pick_optional_string([oid])
+  defp merge_commit_sha(%{"oid" => oid}), do: pick_string([oid])
   defp merge_commit_sha(_value), do: nil
 
   defp normalize_merge_token(value) when is_binary(value), do: String.upcase(String.trim(value))
@@ -886,7 +887,7 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp pull_request_title(%Issue{identifier: identifier, title: title}) do
-    [pick_optional_string([identifier]), pick_optional_string([title])]
+    [pick_string([identifier]), pick_string([title])]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(": ")
     |> case do
@@ -896,7 +897,7 @@ defmodule SymphonyElixir.PullRequests do
   end
 
   defp pull_request_body(issue, context, settings) do
-    issue_url = pick_optional_string([issue.url]) || "Unavailable"
+    issue_url = pick_string([issue.url]) || "Unavailable"
     rollout_mode = settings.rollout.mode
 
     """
@@ -974,5 +975,4 @@ defmodule SymphonyElixir.PullRequests do
     end
   end
 
-  defp pick_optional_string(values) when is_list(values), do: MapUtils.pick_string(values)
 end
