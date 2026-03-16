@@ -44,7 +44,7 @@ defmodule SymphonyElixir.ReviewArtifact do
     path = artifact_path(workspace_path)
 
     case SymphonyElixir.SSH.run(worker_host, "test -f #{path} && echo exists") do
-      {:ok, output} -> String.contains?(output, "exists")
+      {:ok, {output, 0}} -> String.contains?(output, "exists")
       _ -> false
     end
   end
@@ -68,8 +68,8 @@ defmodule SymphonyElixir.ReviewArtifact do
     path = artifact_path(workspace_path)
 
     case SymphonyElixir.SSH.run(worker_host, "cat #{path} 2>/dev/null") do
-      {:ok, body} -> parse_artifact(path, body)
-      {:error, {1, _output}} -> {:ok, :missing}
+      {:ok, {body, 0}} -> parse_artifact(path, body)
+      {:ok, {_output, _nonzero}} -> {:ok, :missing}
       {:error, reason} -> {:error, reason}
     end
   end
