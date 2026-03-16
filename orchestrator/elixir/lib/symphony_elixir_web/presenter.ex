@@ -157,7 +157,9 @@ defmodule SymphonyElixirWeb.Presenter do
       observed_at: iso8601(Map.get(entry, :observed_at)),
       ownership: Map.get(entry, :ownership, %{}),
       kill_switch: Map.get(entry, :kill_switch, %{}),
-      workpad: tracked_workpad_payload(Map.get(entry, :workpad, %{}))
+      workpad: tracked_workpad_payload(Map.get(entry, :workpad, %{})),
+      blocked_by: Map.get(entry, :blocked_by, []),
+      blocks: Map.get(entry, :blocks, [])
     }
   end
 
