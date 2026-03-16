@@ -1041,46 +1041,56 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp maybe_recover_blocked_pr(issue, runtime, opts, settings) do
     if blocked_with_tool_unavailable?(runtime) do
-      branch = workpad_branch(runtime) || issue.branch_name
-      git_state = %{branch: branch, repo_slug: settings.pr.repo_slug}
-
-      Logger.info("Attempting PR recovery for issue_identifier=#{issue.identifier} branch=#{branch} repo=#{settings.pr.repo_slug}")
-
-      case PullRequests.resolve_or_create(issue, git_state, Keyword.put(opts, :settings, settings)) do
-        {:ok, pr_info} ->
-          Logger.info("PR recovery succeeded for issue_identifier=#{issue.identifier} pr_number=#{Map.get(pr_info, :number)}")
-          head_sha = Map.get(pr_info, :head_sha)
-          review_recovery = maybe_recover_review_artifact(issue, pr_info, runtime, opts, settings)
-
-          base = %{
-            phase: "waiting_for_checks",
-            pr: %{number: Map.get(pr_info, :number), url: Map.get(pr_info, :url), head_sha: head_sha},
-            waiting_reason: "checks_pending",
-            next_intended_action: "poll_on_next_cycle",
-            observation_gates: %{"pr" => "open"}
-          }
-
-          case review_recovery do
-            {:ok, details} ->
-              Map.merge(base, %{
-                review: %{
-                  comment_id: Map.get(details, :comment_id),
-                  passes_completed: 1,
-                  last_reviewed_head_sha: head_sha
-                },
-                observation_gates: Map.put(base.observation_gates, "review", "persisted")
-              })
-
-            _ ->
-              base
-          end
-
-        other ->
-          Logger.warning("PR recovery failed for issue_identifier=#{issue.identifier} result=#{inspect(other)}")
-          %{}
-      end
+      recover_blocked_pr(issue, runtime, opts, settings)
     else
       %{}
+    end
+  end
+
+  defp recover_blocked_pr(issue, runtime, opts, settings) do
+    branch = workpad_branch(runtime) || issue.branch_name
+    git_state = %{branch: branch, repo_slug: settings.pr.repo_slug}
+
+    Logger.info("Attempting PR recovery for issue_identifier=#{issue.identifier} branch=#{branch} repo=#{settings.pr.repo_slug}")
+
+    case PullRequests.resolve_or_create(issue, git_state, Keyword.put(opts, :settings, settings)) do
+      {:ok, pr_info} ->
+        Logger.info("PR recovery succeeded for issue_identifier=#{issue.identifier} pr_number=#{Map.get(pr_info, :number)}")
+
+        build_pr_recovery_updates(issue, pr_info, runtime, opts, settings)
+
+      other ->
+        Logger.warning("PR recovery failed for issue_identifier=#{issue.identifier} result=#{inspect(other)}")
+
+        %{}
+    end
+  end
+
+  defp build_pr_recovery_updates(issue, pr_info, runtime, opts, settings) do
+    head_sha = Map.get(pr_info, :head_sha)
+    review_recovery = maybe_recover_review_artifact(issue, pr_info, runtime, opts, settings)
+
+    base = %{
+      phase: "waiting_for_checks",
+      pr: %{number: Map.get(pr_info, :number), url: Map.get(pr_info, :url), head_sha: head_sha},
+      waiting_reason: "checks_pending",
+      next_intended_action: "poll_on_next_cycle",
+      observation_gates: %{"pr" => "open"}
+    }
+
+    case review_recovery do
+      {:ok, details} ->
+        Map.merge(base, %{
+          review: %{
+            comment_id: Map.get(details, :comment_id),
+            passes_completed: 1,
+            last_reviewed_head_sha: head_sha
+          },
+          observation_gates: Map.put(base.observation_gates, "review", "persisted")
+        })
+
+      _ ->
+        base
     end
   end
 

@@ -839,12 +839,10 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp dep_ids(relations) when is_list(relations) do
-    relations
-    |> Enum.map(fn
+    Enum.map_join(relations, ",", fn
       %{identifier: id} when is_binary(id) -> id
       _ -> "?"
     end)
-    |> Enum.join(",")
   end
 
   defp tracked_next_action_summary(entry) do

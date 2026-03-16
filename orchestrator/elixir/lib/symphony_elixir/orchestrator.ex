@@ -33,6 +33,8 @@ defmodule SymphonyElixir.Orchestrator do
     Runtime state for the orchestrator polling loop.
     """
 
+    @type t :: %__MODULE__{}
+
     defstruct [
       :poll_interval_ms,
       :max_concurrent_agents,
@@ -377,7 +379,13 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec should_dispatch_issue_for_test(Issue.t(), term(), map()) :: boolean()
   def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state, tracked_issues \\ %{}) do
-    Dispatch.should_dispatch_issue?(issue, state, Dispatch.active_state_set(), Dispatch.terminal_state_set(), tracked_issues)
+    Dispatch.should_dispatch_issue?(
+      issue,
+      state,
+      Dispatch.active_state_set(),
+      Dispatch.terminal_state_set(),
+      tracked_issues
+    )
   end
 
   @doc false
@@ -638,7 +646,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
-    case Dispatch.revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, Dispatch.terminal_state_set(), state.tracked) do
+    case Dispatch.revalidate_issue_for_dispatch(
+           issue,
+           &Tracker.fetch_issue_states_by_ids/1,
+           Dispatch.terminal_state_set(),
+           state.tracked
+         ) do
       {:ok, %Issue{} = refreshed_issue} ->
         do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
 

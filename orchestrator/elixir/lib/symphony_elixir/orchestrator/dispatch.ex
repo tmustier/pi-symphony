@@ -33,7 +33,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
         %State{running: running, claimed: claimed} = state,
         active_states,
         terminal_states,
-        tracked_issues \\ %{}
+        tracked_issues
       ) do
     candidate_issue?(issue, active_states, terminal_states) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states, tracked_issues) and
@@ -43,8 +43,6 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
       state_slots_available?(issue, running) and
       worker_slots_available?(state)
   end
-
-  def should_dispatch_issue?(_issue, _state, _active_states, _terminal_states, _tracked_issues), do: false
 
   @spec candidate_issue?(Issue.t(), MapSet.t(String.t()), MapSet.t(String.t())) :: boolean()
   @doc """
@@ -114,7 +112,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   def todo_issue_blocked_by_non_terminal?(
         %Issue{state: issue_state, blocked_by: blockers},
         terminal_states,
-        _tracked_issues \\ %{}
+        _tracked_issues
       )
       when is_binary(issue_state) and is_list(blockers) do
     normalize_issue_state(issue_state) == "todo" and
@@ -181,7 +179,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Check if an issue is a retry candidate.
   """
-  def retry_candidate_issue?(%Issue{} = issue, terminal_states, tracked_issues \\ %{}) do
+  def retry_candidate_issue?(%Issue{} = issue, terminal_states, tracked_issues) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states, tracked_issues)
   end
@@ -235,12 +233,13 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Revalidate an issue for dispatch by refreshing its state.
   """
-  @spec revalidate_issue_for_dispatch(Issue.t(), function(), MapSet.t(String.t()), map()) :: {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
+  @spec revalidate_issue_for_dispatch(Issue.t(), function(), MapSet.t(String.t()), map()) ::
+          {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
   def revalidate_issue_for_dispatch(
         %Issue{id: issue_id},
         issue_fetcher,
         terminal_states,
-        tracked_issues \\ %{}
+        tracked_issues
       )
       when is_binary(issue_id) and is_function(issue_fetcher, 1) do
     case issue_fetcher.([issue_id]) do
@@ -258,8 +257,6 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
         {:error, reason}
     end
   end
-
-  def revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _tracked_issues), do: {:ok, issue}
 
   @spec select_worker_host(State.t(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
   @doc """

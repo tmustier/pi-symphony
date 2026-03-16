@@ -67,7 +67,8 @@ defmodule SymphonyElixir.Orchestrator.Retry do
     }
   end
 
-  @spec pop_retry_attempt_state(State.t(), String.t(), reference()) :: {:ok, non_neg_integer(), map(), State.t()} | :missing
+  @spec pop_retry_attempt_state(State.t(), String.t(), reference()) ::
+          {:ok, non_neg_integer(), map(), State.t()} | :missing
   @doc """
   Pop retry attempt state for processing.
   """

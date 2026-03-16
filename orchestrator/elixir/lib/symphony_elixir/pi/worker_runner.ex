@@ -46,47 +46,111 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
     case RpcClient.receive_message(session, heartbeat_ms, pending_line) do
       {:ok, {:response, _response}, next_pending_line} ->
         emit(on_message, EventMapper.heartbeat(turn_session_id, session.metadata))
-        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line, started_at, heartbeat_ms)
+
+        receive_loop(
+          session,
+          turn_session_id,
+          on_message,
+          issue,
+          timeout_ms,
+          next_pending_line,
+          started_at,
+          heartbeat_ms
+        )
 
       {:ok, {:extension_ui_request, payload}, next_pending_line} ->
-        :ok = RpcClient.auto_cancel_extension_request(session, payload)
-        emit(on_message, EventMapper.extension_ui_request(payload, Jason.encode!(payload), turn_session_id, session.metadata))
-        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line, started_at, heartbeat_ms)
+        handle_extension_ui_request(session, payload, turn_session_id, on_message)
+
+        receive_loop(
+          session,
+          turn_session_id,
+          on_message,
+          issue,
+          timeout_ms,
+          next_pending_line,
+          started_at,
+          heartbeat_ms
+        )
 
       {:ok, {:event, %{"type" => "agent_end"} = payload}, _next_pending_line} ->
-        emit(on_message, EventMapper.rpc_event(payload, Jason.encode!(payload), turn_session_id, session.metadata))
-
-        Logger.info("Pi worker turn completed for #{issue_context(issue)} session_id=#{turn_session_id} session_file=#{inspect(session.session_file)}")
-
-        {:ok,
-         %{
-           result: payload,
-           session_id: turn_session_id,
-           base_session_id: session.base_session_id,
-           session_file: session.session_file
-         }}
+        handle_agent_end(session, payload, turn_session_id, on_message, issue)
 
       {:ok, {:event, payload}, next_pending_line} ->
-        emit(on_message, EventMapper.rpc_event(payload, Jason.encode!(payload), turn_session_id, session.metadata))
-        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line, started_at, heartbeat_ms)
+        emit(
+          on_message,
+          EventMapper.rpc_event(payload, Jason.encode!(payload), turn_session_id, session.metadata)
+        )
+
+        receive_loop(
+          session,
+          turn_session_id,
+          on_message,
+          issue,
+          timeout_ms,
+          next_pending_line,
+          started_at,
+          heartbeat_ms
+        )
 
       {:ok, {:malformed, raw}, next_pending_line} ->
         emit(on_message, EventMapper.malformed(raw, turn_session_id, session.metadata))
-        receive_loop(session, turn_session_id, on_message, issue, timeout_ms, next_pending_line, started_at, heartbeat_ms)
+
+        receive_loop(
+          session,
+          turn_session_id,
+          on_message,
+          issue,
+          timeout_ms,
+          next_pending_line,
+          started_at,
+          heartbeat_ms
+        )
 
       {:error, :timeout} ->
-        elapsed = System.monotonic_time(:millisecond) - started_at
-
-        if port_alive?(session) and elapsed < timeout_ms do
-          emit(on_message, EventMapper.heartbeat(turn_session_id, session.metadata))
-          receive_loop(session, turn_session_id, on_message, issue, timeout_ms, pending_line, started_at, heartbeat_ms)
-        else
-          :ok = maybe_abort(session)
-          {:error, :turn_timeout}
-        end
+        handle_heartbeat_timeout(
+          session,
+          turn_session_id,
+          on_message,
+          issue,
+          timeout_ms,
+          pending_line,
+          started_at,
+          heartbeat_ms
+        )
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp handle_extension_ui_request(session, payload, turn_session_id, on_message) do
+    :ok = RpcClient.auto_cancel_extension_request(session, payload)
+    emit(on_message, EventMapper.extension_ui_request(payload, Jason.encode!(payload), turn_session_id, session.metadata))
+  end
+
+  defp handle_agent_end(session, payload, turn_session_id, on_message, issue) do
+    emit(on_message, EventMapper.rpc_event(payload, Jason.encode!(payload), turn_session_id, session.metadata))
+
+    Logger.info("Pi worker turn completed for #{issue_context(issue)} session_id=#{turn_session_id} session_file=#{inspect(session.session_file)}")
+
+    {:ok,
+     %{
+       result: payload,
+       session_id: turn_session_id,
+       base_session_id: session.base_session_id,
+       session_file: session.session_file
+     }}
+  end
+
+  defp handle_heartbeat_timeout(session, turn_session_id, on_message, issue, timeout_ms, pending_line, started_at, heartbeat_ms) do
+    elapsed = System.monotonic_time(:millisecond) - started_at
+
+    if port_alive?(session) and elapsed < timeout_ms do
+      emit(on_message, EventMapper.heartbeat(turn_session_id, session.metadata))
+      receive_loop(session, turn_session_id, on_message, issue, timeout_ms, pending_line, started_at, heartbeat_ms)
+    else
+      :ok = maybe_abort(session)
+      {:error, :turn_timeout}
     end
   end
 

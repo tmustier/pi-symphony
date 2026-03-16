@@ -34,11 +34,6 @@ defmodule SymphonyElixir.ReviewArtifact do
   end
 
   @spec exists?(Path.t(), String.t() | nil) :: boolean()
-  @doc """
-  Check if a review artifact exists.
-  """
-  def exists?(workspace_path, worker_host \\ nil)
-
   def exists?(workspace_path, nil) when is_binary(workspace_path) do
     workspace_path |> artifact_path() |> File.exists?()
   end
@@ -52,14 +47,17 @@ defmodule SymphonyElixir.ReviewArtifact do
     end
   end
 
+  def exists?(workspace_path, _worker_host) when is_binary(workspace_path) do
+    exists?(workspace_path, nil)
+  end
+
   def exists?(_workspace_path, _worker_host), do: false
 
-  @spec load(Path.t() | nil, String.t() | nil) :: {:ok, artifact()} | {:ok, :missing} | {:error, term()}
-  @doc """
-  Load a review artifact from disk or remote worker.
-  """
-  def load(workspace_path, worker_host \\ nil)
+  @spec load(Path.t()) :: {:ok, artifact()} | {:ok, :missing} | {:error, term()}
+  def load(workspace_path) when is_binary(workspace_path), do: load(workspace_path, nil)
+  def load(_workspace_path), do: {:ok, :missing}
 
+  @spec load(Path.t() | nil, String.t() | nil) :: {:ok, artifact()} | {:ok, :missing} | {:error, term()}
   def load(workspace_path, nil) when is_binary(workspace_path) do
     path = artifact_path(workspace_path)
 
@@ -78,6 +76,10 @@ defmodule SymphonyElixir.ReviewArtifact do
       {:ok, {_output, _nonzero}} -> {:ok, :missing}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  def load(workspace_path, _worker_host) when is_binary(workspace_path) do
+    load(workspace_path, nil)
   end
 
   def load(_workspace_path, _worker_host), do: {:ok, :missing}
