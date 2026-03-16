@@ -5,7 +5,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   """
 
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.MapUtils
+  import SymphonyElixir.MapUtils, only: [fetch_value: 2, normalize_optional_string: 1, normalize_map: 1]
 
   @phase_values [
     "implementing",
@@ -424,20 +424,18 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   defp default_waiting_reason(false, "observe", _blocking_reason), do: "observe_only"
   defp default_waiting_reason(_passive_phase, _rollout_mode, _blocking_reason), do: nil
 
-  defp fetch_value(map, key), do: MapUtils.fetch_value(map, key)
 
   defp comment_field(comment, field) when is_map(comment) and is_atom(field) do
-    MapUtils.fetch_value(comment, field)
+    fetch_value(comment, field)
   end
 
-  defp normalize_map(value), do: MapUtils.normalize_map(value)
+
 
   defp normalize_label(value) do
-    case MapUtils.normalize_optional_string(value) do
+    case normalize_optional_string(value) do
       nil -> nil
       normalized -> String.downcase(normalized)
     end
   end
 
-  defp normalize_optional_string(value), do: MapUtils.normalize_optional_string(value)
 end

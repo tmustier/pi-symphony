@@ -3,7 +3,8 @@ defmodule SymphonyElixir.Workpad do
   Canonical Symphony workpad comment read/write helpers.
   """
 
-  alias SymphonyElixir.{Config, MapUtils, OrchestrationPolicy, Tracker}
+  alias SymphonyElixir.{Config, OrchestrationPolicy, Tracker}
+  import SymphonyElixir.MapUtils, only: [fetch_value: 2, normalize_optional_string: 1]
   alias SymphonyElixir.Linear.Issue
 
   @schema_version 1
@@ -609,16 +610,14 @@ defmodule SymphonyElixir.Workpad do
   defp passive_phase?(_phase), do: false
 
   defp normalize_map(nil), do: %{}
-  defp normalize_map(value) when is_map(value), do: MapUtils.normalize_map(value)
+  defp normalize_map(%{} = value), do: value
   defp normalize_map(_value), do: %{}
 
-  defp normalize_optional_string(value), do: MapUtils.normalize_optional_string(value)
 
-  defp comment_id(comment), do: MapUtils.fetch_value(comment, :id)
-  defp comment_body(comment), do: MapUtils.fetch_value(comment, :body) || ""
-  defp comment_updated_at(comment), do: MapUtils.fetch_value(comment, :updated_at)
+  defp comment_id(comment), do: fetch_value(comment, :id)
+  defp comment_body(comment), do: fetch_value(comment, :body) || ""
+  defp comment_updated_at(comment), do: fetch_value(comment, :updated_at)
 
-  defp fetch_value(map, key), do: MapUtils.fetch_value(map, key)
 
   defp normalize_comment_timestamp(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
 

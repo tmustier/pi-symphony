@@ -3,7 +3,8 @@ defmodule SymphonyElixir.WorkspaceGit do
   Inspects git state for a Symphony workspace.
   """
 
-  alias SymphonyElixir.{MapUtils, SSH}
+  alias SymphonyElixir.SSH
+  import SymphonyElixir.MapUtils, only: [normalize_optional_string: 1]
 
   @type git_state :: %{
           branch: String.t() | nil,
@@ -104,7 +105,6 @@ defmodule SymphonyElixir.WorkspaceGit do
     end
   end
 
-  defp normalize_optional_string(value), do: MapUtils.normalize_optional_string(value)
 
   defp shell_escape(value) do
     "'" <> String.replace(value, "'", "'\"'\"'") <> "'"

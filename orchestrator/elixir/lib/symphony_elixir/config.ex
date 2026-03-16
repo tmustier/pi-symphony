@@ -49,14 +49,35 @@ defmodule SymphonyElixir.Config do
           turn_sandbox_policy: map()
         }
 
+  @settings_cache_key :symphony_settings_cache
+
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}
   def settings do
     case Workflow.current() do
       {:ok, %{config: config}} when is_map(config) ->
-        Schema.parse(config)
+        cached_settings_parse(config)
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp cached_settings_parse(config) when is_map(config) do
+    cache_key = :erlang.phash2(config)
+
+    case Process.get(@settings_cache_key) do
+      {^cache_key, settings} ->
+        {:ok, settings}
+
+      _ ->
+        case Schema.parse(config) do
+          {:ok, settings} = result ->
+            Process.put(@settings_cache_key, {cache_key, settings})
+            result
+
+          error ->
+            error
+        end
     end
   end
 

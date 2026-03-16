@@ -7,8 +7,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.MapUtils
   alias SymphonyElixir.OrchestrationPolicy
+
+  import SymphonyElixir.MapUtils, only: [fetch_value: 2, pick_string: 1, normalize_optional_string: 1]
   alias SymphonyElixir.PullRequests
   alias SymphonyElixir.ReviewArtifact
   alias SymphonyElixir.Tracker
@@ -1106,7 +1107,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     |> normalize_optional_string()
   end
 
-  defp normalize_optional_string(value), do: MapUtils.normalize_optional_string(value)
+
 
   defp passive_pr_context(runtime, opts) do
     pr_metadata = current_pr_metadata(runtime)
@@ -1308,10 +1309,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
-  defp fetch_value(map, key), do: MapUtils.fetch_value(map, key)
+
 
   defp normalize_map(%{} = map), do: map
   defp normalize_map(_value), do: %{}
 
-  defp pick_string(values), do: MapUtils.pick_string(values)
 end

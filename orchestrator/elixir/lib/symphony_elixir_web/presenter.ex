@@ -3,7 +3,8 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{Config, MapUtils, Orchestrator, StatusDashboard}
+  alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
+  import SymphonyElixir.MapUtils, only: [fetch_value: 2]
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
@@ -329,7 +330,6 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp tracked_observation_metadata(_observation), do: nil
 
-  defp fetch_value(map, key), do: MapUtils.fetch_value(map, key)
 
   defp maybe_put(payload, _key, nil), do: payload
   defp maybe_put(payload, key, value), do: Map.put(payload, key, value)

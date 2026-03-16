@@ -5,7 +5,8 @@ defmodule SymphonyElixir.Config.Schema do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.{MapUtils, OrchestrationPolicy, PathSafety, Workflow}
+  alias SymphonyElixir.{OrchestrationPolicy, PathSafety, Workflow}
+  import SymphonyElixir.MapUtils, only: [normalize_optional_string: 1, stringify_key: 1]
 
   @primary_key false
 
@@ -715,7 +716,7 @@ defmodule SymphonyElixir.Config.Schema do
   defp normalize_optional_map(nil), do: nil
   defp normalize_optional_map(value) when is_map(value), do: normalize_keys(value)
 
-  defp normalize_key(value), do: MapUtils.stringify_key(value)
+  defp normalize_key(value), do: stringify_key(value)
 
   defp drop_nil_values(value) when is_map(value) do
     Enum.reduce(value, %{}, fn {key, nested}, acc ->
@@ -815,7 +816,6 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp normalize_optional_path(_value), do: nil
 
-  defp normalize_optional_string(value), do: MapUtils.normalize_optional_string(value)
 
   defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
 
