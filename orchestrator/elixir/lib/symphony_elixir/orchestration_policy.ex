@@ -145,9 +145,21 @@ defmodule SymphonyElixir.OrchestrationPolicy do
       next_intended_action: runtime.next_intended_action,
       ownership: runtime.ownership,
       kill_switch: runtime.kill_switch,
-      workpad: runtime.workpad
+      workpad: runtime.workpad,
+      blocked_by: compact_relations(issue.blocked_by)
     }
   end
+
+  defp compact_relations(relations) when is_list(relations) do
+    Enum.flat_map(relations, fn
+      %{id: id, identifier: identifier} when is_binary(id) ->
+        [%{id: id, identifier: identifier}]
+      _ ->
+        []
+    end)
+  end
+
+  defp compact_relations(_relations), do: []
 
   defp configured_workpad_marker(%{orchestration: %{ownership: %{required_workpad_marker: marker}}}) do
     normalize_optional_string(marker) || @default_workpad_marker

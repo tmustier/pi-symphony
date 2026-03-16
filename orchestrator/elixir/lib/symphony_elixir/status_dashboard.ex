@@ -790,10 +790,13 @@ defmodule SymphonyElixir.StatusDashboard do
     tracker_state = map_path(entry, [:state]) || "unknown"
     phase = map_path(entry, [:phase]) || "unknown"
 
+    deps = tracked_dependency_summary(entry)
+
     details =
       [
         tracker_state,
         phase,
+        deps,
         tracked_wait_summary(entry),
         tracked_pr_summary(entry),
         tracked_review_summary(entry),
@@ -819,6 +822,29 @@ defmodule SymphonyElixir.StatusDashboard do
       value when is_binary(value) and value != "" -> value
       _ -> nil
     end
+  end
+
+  defp tracked_dependency_summary(entry) do
+    blocked_by = Map.get(entry, :blocked_by, [])
+    blocks = Map.get(entry, :blocks, [])
+
+    parts =
+      [
+        if(blocked_by != [], do: "←" <> dep_ids(blocked_by)),
+        if(blocks != [], do: "→" <> dep_ids(blocks))
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    if parts == [], do: nil, else: Enum.join(parts, " ")
+  end
+
+  defp dep_ids(relations) when is_list(relations) do
+    relations
+    |> Enum.map(fn
+      %{identifier: id} when is_binary(id) -> id
+      _ -> "?"
+    end)
+    |> Enum.join(",")
   end
 
   defp tracked_next_action_summary(entry) do

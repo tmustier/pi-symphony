@@ -1129,10 +1129,33 @@ defmodule SymphonyElixir.Orchestrator do
       end)
       |> Map.new(fn tracked_issue -> {tracked_issue.issue_id, tracked_issue} end)
 
+    tracked = compute_blocks(tracked)
+
     %{state | tracked: tracked}
   end
 
   defp update_tracked_issues(state, _issues), do: state
+
+  defp compute_blocks(tracked) when is_map(tracked) do
+    # Invert blocked_by: if B says "blocked_by A", then A blocks B.
+    blocks_map =
+      tracked
+      |> Enum.flat_map(fn {issue_id, entry} ->
+        entry
+        |> Map.get(:blocked_by, [])
+        |> Enum.flat_map(fn
+          %{id: blocker_id, identifier: _} when is_binary(blocker_id) ->
+            [{blocker_id, %{id: issue_id, identifier: entry.issue_identifier}}]
+          _ ->
+            []
+        end)
+      end)
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+    Map.new(tracked, fn {issue_id, entry} ->
+      {issue_id, Map.put(entry, :blocks, Map.get(blocks_map, issue_id, []))}
+    end)
+  end
 
   defp update_tracked_issue(%State{} = state, %Issue{id: issue_id} = issue) when is_binary(issue_id) do
     tracked_issue =
