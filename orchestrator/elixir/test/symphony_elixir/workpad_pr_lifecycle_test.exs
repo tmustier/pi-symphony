@@ -3897,4 +3897,269 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
         else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
     end
   end
+
+  test "resolve_or_create falls back to settings.pr.repo_slug when git_state has no repo_slug" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      pr_auto_create: false,
+      pr_repo_slug: "acme/fallback-repo",
+      pr_required_labels: []
+    )
+
+    issue = %Issue{
+      identifier: "MT-SLUG",
+      title: "Fallback repo slug",
+      url: "https://example.org/issues/MT-SLUG",
+      branch_name: "feature/fallback-slug"
+    }
+
+    Process.put(:github_runner_results, [
+      {:ok,
+       Jason.encode!([
+         %{
+           "number" => 99,
+           "url" => "https://github.com/acme/fallback-repo/pull/99",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/fallback-slug",
+           "headRefOid" => "fallback123",
+           "baseRefName" => "main"
+         }
+       ])}
+    ])
+
+    runner = fn command, args, _opts ->
+      send(self(), {:github_command, command, args})
+
+      case Process.get(:github_runner_results) do
+        [result | rest] ->
+          Process.put(:github_runner_results, rest)
+          result
+
+        _ ->
+          {:error, :no_github_result}
+      end
+    end
+
+    # Pass git_state WITHOUT repo_slug — should fall back to settings.pr.repo_slug
+    git_state = %{branch: "feature/fallback-slug", head_sha: "fallback123"}
+    assert is_nil(Map.get(git_state, :repo_slug))
+
+    assert {:ok, pr_info} =
+             PullRequests.resolve_or_create_for_test(issue, git_state, runner: runner)
+
+    assert pr_info.number == 99
+    assert pr_info.url == "https://github.com/acme/fallback-repo/pull/99"
+
+    # Verify the runner was called with the settings repo_slug, not nil
+    assert_received {:github_command, "gh", ["pr", "list", "--repo", "acme/fallback-repo" | _rest]}
+  end
+
+  test "resolve_or_create skips with missing_repo_slug when neither git_state nor settings provide one" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      pr_auto_create: false,
+      pr_repo_slug: nil,
+      pr_required_labels: []
+    )
+
+    issue = %Issue{
+      identifier: "MT-NOSLUG",
+      title: "No repo slug anywhere",
+      url: "https://example.org/issues/MT-NOSLUG",
+      branch_name: "feature/no-slug"
+    }
+
+    runner = fn _command, _args, _opts -> {:error, :should_not_be_called} end
+
+    git_state = %{branch: "feature/no-slug"}
+
+    assert {:skip, %{reason: :missing_repo_slug}} =
+             PullRequests.resolve_or_create_for_test(issue, git_state, runner: runner)
+  end
+
+  test "bootstrap lifecycle moves conflicting PR to rework with merge_conflict waiting reason" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      merge_mode: "auto",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1"
+    )
+
+    issue = %Issue{
+      id: "issue-conflict-wr",
+      identifier: "MT-WR",
+      state: "In Review",
+      title: "Issue with conflict — check waiting_reason",
+      description: "Branch has diverged",
+      url: "https://example.org/issues/MT-WR",
+      branch_name: "feature/conflict-wr",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "wpad-wr",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: waiting_for_checks\n  branch: feature/conflict-wr\n  pr:\n    url: https://github.com/acme/widgets/pull/300\n    head_sha: wrhead123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 300,
+           "url" => "https://github.com/acme/widgets/pull/300",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/conflict-wr",
+           "headRefOid" => "wrhead123",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "DIRTY",
+           "mergeable" => "CONFLICTING",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => []
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      assert runtime.phase == "rework"
+      # waiting_reason is nil for rework (active phase, not passive) — the
+      # conflict signal is in the observation gates instead
+      assert is_nil(runtime.waiting_reason)
+      gates = runtime.workpad.metadata["observation"]["gates"]
+      assert gates["mergeability"] == "conflict"
+      observation = runtime.workpad.metadata["observation"]
+      assert observation["next_intended_action"] == "rebase_onto_base_branch"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "passive polling recovers tool_unavailable to waiting_for_checks when PR exists" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_repo_slug: "acme/widgets",
+      pr_required_labels: []
+    )
+
+    # Simulate an issue that completed work but got stuck on tool_unavailable
+    issue = %Issue{
+      id: "issue-recovery",
+      identifier: "MT-RECOVER",
+      state: "In Review",
+      title: "Recover from tool_unavailable",
+      description: "PR exists but orchestrator missed it",
+      url: "https://example.org/issues/MT-RECOVER",
+      branch_name: "feature/recover-pr",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "wpad-recover",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: blocked\n  branch: feature/recover-pr\n  waiting:\n    reason: tool_unavailable\n  observation:\n    next_intended_action: restore_pr_tooling\n  pr:\n    head_sha: recover123\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      # The recovery path calls resolve_or_create with branch + settings repo_slug
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 500,
+             "url" => "https://github.com/acme/widgets/pull/500",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/recover-pr",
+             "headRefOid" => "recover123",
+             "baseRefName" => "main"
+           }
+         ])}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      # Should have recovered from blocked/tool_unavailable to waiting_for_checks
+      assert runtime.phase == "waiting_for_checks"
+      refute runtime.waiting_reason == "tool_unavailable"
+
+      # PR metadata should be populated
+      pr_meta = runtime.workpad.metadata["pr"]
+      assert pr_meta["number"] == 500
+      assert pr_meta["url"] == "https://github.com/acme/widgets/pull/500"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
 end
