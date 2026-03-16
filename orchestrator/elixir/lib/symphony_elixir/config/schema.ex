@@ -483,7 +483,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     embedded_schema do
-      field(:port, :integer, default: 4000)
+      field(:port, :integer)
       field(:host, :string, default: "127.0.0.1")
     end
 
@@ -491,7 +491,7 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, [:port, :host], empty_values: [])
-      |> validate_number(:port, greater_than: 0)
+      |> validate_number(:port, greater_than_or_equal_to: 0)
     end
   end
 

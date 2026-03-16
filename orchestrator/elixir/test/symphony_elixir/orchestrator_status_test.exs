@@ -1049,8 +1049,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     rendered = StatusDashboard.format_snapshot_content_for_test(snapshot_data, 0.0)
 
     assert rendered =~ "https://linear.app/project/project/issues"
-    assert rendered =~ "Dashboard:"
-    assert rendered =~ "http://127.0.0.1:4000/"
+    refute rendered =~ "Dashboard:"
   end
 
   test "status dashboard renders dashboard url on its own line when server port is configured" do

@@ -7,7 +7,6 @@
 │ Rate Limits: gpt-5 | primary 12,345/20,000 reset 30s | secondary 45/60 reset 12s | credits 9876.50
 │ Rollout: mutate
 │ Project: https://linear.app/project/project/issues
-│ Dashboard: http://127.0.0.1:4000/
 │ Next refresh: n/a
 ├─ Running
 │
