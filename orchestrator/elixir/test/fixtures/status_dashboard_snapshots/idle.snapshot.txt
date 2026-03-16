@@ -6,6 +6,7 @@
 \e[1m│ Rate Limits: \e[0m\e[90munavailable\e[0m
 \e[1m│ Rollout: \e[0m\e[33mmutate\e[0m
 \e[1m│ Project: \e[0m\e[36mhttps://linear.app/project/project/issues\e[0m
+\e[1m│ Dashboard: \e[0m\e[36mhttp://127.0.0.1:4000/\e[0m
 \e[1m│ Next refresh: \e[0m\e[90mn/a\e[0m
 \e[1m├─ Running\e[0m
 │

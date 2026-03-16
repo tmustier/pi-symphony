@@ -7,6 +7,7 @@
 │ Rate Limits: priority-tier | primary 100/100 reset 1s | secondary 500/500 reset 1s | credits unlimited
 │ Rollout: mutate
 │ Project: https://linear.app/project/project/issues
+│ Dashboard: http://127.0.0.1:4000/
 │ Next refresh: n/a
 ├─ Running
 │

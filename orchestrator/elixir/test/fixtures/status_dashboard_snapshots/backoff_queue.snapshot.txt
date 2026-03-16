@@ -6,6 +6,7 @@
 \e[1m│ Rate Limits: \e[0m\e[33mgpt-5\e[0m\e[90m | \e[0m\e[36mprimary 0/20,000 reset 95s\e[0m\e[90m | \e[0m\e[36msecondary 0/60 reset 45s\e[0m\e[90m | \e[0m\e[32mcredits none\e[0m
 \e[1m│ Rollout: \e[0m\e[33mmutate\e[0m
 \e[1m│ Project: \e[0m\e[36mhttps://linear.app/project/project/issues\e[0m
+\e[1m│ Dashboard: \e[0m\e[36mhttp://127.0.0.1:4000/\e[0m
 \e[1m│ Next refresh: \e[0m\e[90mn/a\e[0m
 \e[1m├─ Running\e[0m
 │

@@ -3,6 +3,8 @@ defmodule SymphonyElixir.HttpServer do
   Compatibility facade that starts the Phoenix observability endpoint when enabled.
   """
 
+  require Logger
+
   alias SymphonyElixir.{Config, Orchestrator}
   alias SymphonyElixirWeb.Endpoint
 
@@ -31,11 +33,13 @@ defmodule SymphonyElixir.HttpServer do
         orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
+        Logger.info("HTTP server binding to #{host}:#{if port == 0, do: "<ephemeral>", else: port}")
+
         with {:ok, ip} <- parse_host(host) do
           endpoint_opts = [
             server: true,
             http: [ip: ip, port: port],
-            url: [host: normalize_host(host)],
+            url: [host: normalize_host(host), port: port],
             orchestrator: orchestrator,
             snapshot_timeout_ms: snapshot_timeout_ms,
             secret_key_base: secret_key_base()
@@ -51,10 +55,12 @@ defmodule SymphonyElixir.HttpServer do
         end
 
       _ when attempt < @startup_max_retries ->
+        Logger.debug("HTTP server port not available yet, retrying (attempt #{attempt + 1}/#{@startup_max_retries})")
         Process.sleep(@startup_retry_delay_ms)
         start_endpoint(opts, attempt + 1)
 
       _ ->
+        Logger.warning("HTTP server port could not be resolved after #{@startup_max_retries} retries, skipping")
         :ignore
     end
   end
@@ -62,7 +68,9 @@ defmodule SymphonyElixir.HttpServer do
   defp safe_server_port do
     Config.server_port()
   rescue
-    _ -> nil
+    error ->
+      Logger.debug("Failed to read server port: #{Exception.message(error)}")
+      nil
   end
 
   defp safe_server_host do
