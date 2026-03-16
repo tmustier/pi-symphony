@@ -4242,6 +4242,10 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       assert runtime.workpad.metadata["pr"]["number"] == nil
       assert runtime.workpad.metadata["pr"]["url"] == nil
 
+      # Review metadata should also be cleared to prevent writing to the old PR's comment
+      assert runtime.workpad.metadata["review"]["comment_id"] == nil
+      assert runtime.workpad.metadata["review"]["passes_completed"] == 0
+
       # Phase should reset to default (implementing) to allow fresh dispatch
       assert runtime.phase == "implementing"
       assert runtime.dispatch_allowed == true

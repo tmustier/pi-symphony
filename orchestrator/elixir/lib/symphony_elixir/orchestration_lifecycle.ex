@@ -1158,6 +1158,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       %{
         phase: settings.orchestration.default_phase,
         pr: %{number: nil, url: nil, head_sha: nil},
+        review: %{comment_id: nil, passes_completed: 0, last_reviewed_head_sha: nil, last_fixed_head_sha: nil},
         waiting_reason: nil,
         next_intended_action: "dispatch_worker",
         observation_gates: %{"pr" => "pending"}
