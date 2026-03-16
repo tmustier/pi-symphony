@@ -10,6 +10,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Orchestrator.State
 
+  @spec sort_issues_for_dispatch(list(Issue.t() | any())) :: list(Issue.t() | any())
   @doc """
   Sort issues by priority and creation date for dispatch consideration.
   """
@@ -26,14 +27,13 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Determine if an issue should be dispatched based on current state.
   """
-  def should_dispatch_issue?(issue, state, active_states, terminal_states, tracked_issues \\ %{})
-
+  @spec should_dispatch_issue?(Issue.t(), State.t(), MapSet.t(String.t()), MapSet.t(String.t()), map()) :: boolean()
   def should_dispatch_issue?(
         %Issue{} = issue,
         %State{running: running, claimed: claimed} = state,
         active_states,
         terminal_states,
-        tracked_issues
+        tracked_issues \\ %{}
       ) do
     candidate_issue?(issue, active_states, terminal_states) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states, tracked_issues) and
@@ -46,6 +46,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   def should_dispatch_issue?(_issue, _state, _active_states, _terminal_states, _tracked_issues), do: false
 
+  @spec candidate_issue?(Issue.t(), MapSet.t(String.t()), MapSet.t(String.t())) :: boolean()
   @doc """
   Check if an issue is a candidate for dispatch.
   """
@@ -68,6 +69,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   def candidate_issue?(_issue, _active_states, _terminal_states), do: false
 
+  @spec dispatch_allowed_by_policy?(Issue.t()) :: boolean()
   @doc """
   Check if dispatch is allowed by orchestration policy.
   """
@@ -77,6 +79,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     |> Map.get(:dispatch_allowed, true)
   end
 
+  @spec issue_orchestration_phase(Issue.t()) :: any()
   @doc """
   Get the orchestration phase for an issue.
   """
@@ -88,6 +91,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     _ -> nil
   end
 
+  @spec issue_routable_to_worker?(Issue.t()) :: boolean()
   @doc """
   Check if an issue is routable to a worker.
   """
@@ -106,12 +110,11 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   This prevents pipeline deadlocks when blockers have finished their work but are
   waiting on merge gates.
   """
-  def todo_issue_blocked_by_non_terminal?(issue, terminal_states, tracked_issues \\ %{})
-
+  @spec todo_issue_blocked_by_non_terminal?(Issue.t(), MapSet.t(String.t()), map()) :: boolean()
   def todo_issue_blocked_by_non_terminal?(
         %Issue{state: issue_state, blocked_by: blockers},
         terminal_states,
-        _tracked_issues
+        _tracked_issues \\ %{}
       )
       when is_binary(issue_state) and is_list(blockers) do
     normalize_issue_state(issue_state) == "todo" and
@@ -126,6 +129,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   def todo_issue_blocked_by_non_terminal?(_issue, _terminal_states, _tracked_issues), do: false
 
+  @spec terminal_issue_state?(String.t(), MapSet.t(String.t())) :: boolean()
   @doc """
   Check if an issue state is terminal.
   """
@@ -135,6 +139,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   def terminal_issue_state?(_state_name, _terminal_states), do: false
 
+  @spec active_issue_state?(String.t(), MapSet.t(String.t())) :: boolean()
   @doc """
   Check if an issue state is active.
   """
@@ -142,6 +147,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     MapSet.member?(active_states, normalize_issue_state(state_name))
   end
 
+  @spec normalize_issue_state(String.t()) :: String.t()
   @doc """
   Normalize an issue state name for comparison.
   """
@@ -149,6 +155,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     String.downcase(String.trim(state_name))
   end
 
+  @spec terminal_state_set() :: MapSet.t(String.t())
   @doc """
   Get the set of terminal states from configuration.
   """
@@ -159,6 +166,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     |> MapSet.new()
   end
 
+  @spec active_state_set() :: MapSet.t(String.t())
   @doc """
   Get the set of active states from configuration.
   """
@@ -169,6 +177,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     |> MapSet.new()
   end
 
+  @spec retry_candidate_issue?(Issue.t(), MapSet.t(String.t()), map()) :: boolean()
   @doc """
   Check if an issue is a retry candidate.
   """
@@ -177,6 +186,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states, tracked_issues)
   end
 
+  @spec state_slots_available?(Issue.t(), map()) :: boolean()
   @doc """
   Check if state slots are available for an issue.
   """
@@ -188,6 +198,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   def state_slots_available?(_issue, _running), do: false
 
+  @spec running_issue_count_for_state(map(), String.t()) :: non_neg_integer()
   @doc """
   Count running issues for a specific state.
   """
@@ -203,12 +214,14 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     end)
   end
 
+  @spec priority_rank(integer() | nil) :: integer()
   @doc """
   Get priority rank for sorting (lower numbers = higher priority).
   """
   def priority_rank(priority) when is_integer(priority) and priority in 1..4, do: priority
   def priority_rank(_priority), do: 5
 
+  @spec issue_created_at_sort_key(Issue.t() | nil) :: integer()
   @doc """
   Get issue creation timestamp as sort key.
   """
@@ -222,9 +235,13 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Revalidate an issue for dispatch by refreshing its state.
   """
-  def revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_states, tracked_issues \\ %{})
-
-  def revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states, tracked_issues)
+  @spec revalidate_issue_for_dispatch(Issue.t(), function(), MapSet.t(String.t()), map()) :: {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
+  def revalidate_issue_for_dispatch(
+        %Issue{id: issue_id},
+        issue_fetcher,
+        terminal_states,
+        tracked_issues \\ %{}
+      )
       when is_binary(issue_id) and is_function(issue_fetcher, 1) do
     case issue_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
@@ -244,6 +261,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   def revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _tracked_issues), do: {:ok, issue}
 
+  @spec select_worker_host(State.t(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
   @doc """
   Select the best worker host for dispatching an issue.
   """
@@ -268,6 +286,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     end
   end
 
+  @spec preferred_worker_host_available?(String.t() | nil, list(String.t())) :: boolean()
   @doc """
   Check if preferred worker host is available.
   """
@@ -278,6 +297,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   def preferred_worker_host_available?(_preferred_worker_host, _hosts), do: false
 
+  @spec least_loaded_worker_host(State.t(), list(String.t())) :: String.t()
   @doc """
   Find the least loaded worker host from available hosts.
   """
@@ -290,6 +310,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     |> elem(0)
   end
 
+  @spec running_worker_host_count(map(), String.t()) :: non_neg_integer()
   @doc """
   Count running issues on a specific worker host.
   """
@@ -300,6 +321,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     end)
   end
 
+  @spec worker_host_slots_available?(State.t(), String.t()) :: boolean()
   @doc """
   Check if worker host has available slots.
   """
@@ -313,6 +335,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     end
   end
 
+  @spec worker_slots_available?(State.t()) :: boolean()
   @doc """
   Check if any worker slots are available.
   """
@@ -320,10 +343,12 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     select_worker_host(state, nil) != :no_worker_capacity
   end
 
+  @spec worker_slots_available?(State.t(), String.t() | nil) :: boolean()
   def worker_slots_available?(%State{} = state, preferred_worker_host) do
     select_worker_host(state, preferred_worker_host) != :no_worker_capacity
   end
 
+  @spec dispatch_slots_available?(Issue.t(), State.t()) :: boolean()
   @doc """
   Check if dispatch slots are available for an issue.
   """
@@ -331,6 +356,7 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
     available_slots(state) > 0 and state_slots_available?(issue, state.running)
   end
 
+  @spec available_slots(State.t()) :: non_neg_integer()
   @doc """
   Calculate available orchestrator slots.
   """

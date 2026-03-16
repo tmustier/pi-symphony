@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Orchestrator.Metrics do
   and make it more testable and maintainable.
   """
 
+  @spec integrate_worker_update(map(), map()) :: {map(), map()}
   @doc """
   Integrate worker update into running entry and extract token delta.
   """
@@ -39,6 +40,7 @@ defmodule SymphonyElixir.Orchestrator.Metrics do
     }
   end
 
+  @spec extract_token_delta(map() | nil, map()) :: map()
   @doc """
   Extract token usage delta from worker update.
   """
@@ -79,6 +81,7 @@ defmodule SymphonyElixir.Orchestrator.Metrics do
     end)
   end
 
+  @spec apply_token_delta(map(), map()) :: map()
   @doc """
   Apply token delta to worker totals.
   """
@@ -98,6 +101,7 @@ defmodule SymphonyElixir.Orchestrator.Metrics do
     }
   end
 
+  @spec extract_rate_limits(map()) :: map() | nil
   @doc """
   Extract rate limits from worker update.
   """
@@ -110,6 +114,7 @@ defmodule SymphonyElixir.Orchestrator.Metrics do
       rate_limits_from_payload(update)
   end
 
+  @spec running_seconds(DateTime.t(), DateTime.t()) :: non_neg_integer()
   @doc """
   Calculate running time in seconds between two timestamps.
   """

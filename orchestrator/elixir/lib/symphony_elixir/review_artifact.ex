@@ -34,6 +34,9 @@ defmodule SymphonyElixir.ReviewArtifact do
   end
 
   @spec exists?(Path.t(), String.t() | nil) :: boolean()
+  @doc """
+  Check if a review artifact exists.
+  """
   def exists?(workspace_path, worker_host \\ nil)
 
   def exists?(workspace_path, nil) when is_binary(workspace_path) do
@@ -52,6 +55,9 @@ defmodule SymphonyElixir.ReviewArtifact do
   def exists?(_workspace_path, _worker_host), do: false
 
   @spec load(Path.t() | nil, String.t() | nil) :: {:ok, artifact()} | {:ok, :missing} | {:error, term()}
+  @doc """
+  Load a review artifact from disk or remote worker.
+  """
   def load(workspace_path, worker_host \\ nil)
 
   def load(workspace_path, nil) when is_binary(workspace_path) do

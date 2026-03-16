@@ -14,6 +14,7 @@ defmodule SymphonyElixir.Orchestrator.Retry do
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
 
+  @spec schedule_issue_retry(State.t(), String.t(), integer() | nil, map()) :: State.t()
   @doc """
   Schedule a retry attempt for an issue.
   """
@@ -66,6 +67,7 @@ defmodule SymphonyElixir.Orchestrator.Retry do
     }
   end
 
+  @spec pop_retry_attempt_state(State.t(), String.t(), reference()) :: {:ok, non_neg_integer(), map(), State.t()} | :missing
   @doc """
   Pop retry attempt state for processing.
   """
@@ -91,6 +93,7 @@ defmodule SymphonyElixir.Orchestrator.Retry do
     end
   end
 
+  @spec retry_delay(pos_integer(), map()) :: pos_integer()
   @doc """
   Calculate retry delay based on attempt number and metadata.
   """
@@ -102,6 +105,7 @@ defmodule SymphonyElixir.Orchestrator.Retry do
     end
   end
 
+  @spec failure_retry_delay(pos_integer()) :: pos_integer()
   @doc """
   Calculate exponential backoff delay for failures.
   """
@@ -110,12 +114,14 @@ defmodule SymphonyElixir.Orchestrator.Retry do
     min(@failure_retry_base_ms * (1 <<< max_delay_power), Config.settings!().agent.max_retry_backoff_ms)
   end
 
+  @spec normalize_retry_attempt(integer() | any()) :: non_neg_integer()
   @doc """
   Normalize retry attempt to valid range.
   """
   def normalize_retry_attempt(attempt) when is_integer(attempt) and attempt > 0, do: attempt
   def normalize_retry_attempt(_attempt), do: 0
 
+  @spec next_retry_attempt_from_running(map()) :: integer() | nil
   @doc """
   Calculate next retry attempt from running entry.
   """
@@ -126,6 +132,7 @@ defmodule SymphonyElixir.Orchestrator.Retry do
     end
   end
 
+  @spec retry_runtime_metadata(map()) :: map()
   @doc """
   Extract retry runtime metadata from running entry.
   """
