@@ -33,36 +33,56 @@ defmodule SymphonyElixir.ReviewArtifact do
     Path.join(workspace_path, @relative_path)
   end
 
-  @spec exists?(Path.t()) :: boolean()
-  def exists?(workspace_path) when is_binary(workspace_path) do
+  @spec exists?(Path.t(), String.t() | nil) :: boolean()
+  def exists?(workspace_path, worker_host \\ nil)
+
+  def exists?(workspace_path, nil) when is_binary(workspace_path) do
     workspace_path |> artifact_path() |> File.exists?()
   end
 
-  def exists?(_workspace_path), do: false
-
-  @spec load(Path.t() | nil) :: {:ok, artifact()} | {:ok, :missing} | {:error, term()}
-  def load(workspace_path) when is_binary(workspace_path) do
+  def exists?(workspace_path, worker_host) when is_binary(workspace_path) and is_binary(worker_host) do
     path = artifact_path(workspace_path)
 
-    case File.read(path) do
-      {:ok, body} ->
-        case normalize_body(body) do
-          nil ->
-            {:ok, :missing}
-
-          %{body: normalized_body, reviewed_head_sha: reviewed_head_sha} ->
-            {:ok, %{path: path, body: normalized_body, reviewed_head_sha: reviewed_head_sha}}
-        end
-
-      {:error, :enoent} ->
-        {:ok, :missing}
-
-      {:error, reason} ->
-        {:error, reason}
+    case SymphonyElixir.SSH.run(worker_host, "test -f #{path} && echo exists") do
+      {:ok, output} -> String.contains?(output, "exists")
+      _ -> false
     end
   end
 
-  def load(_workspace_path), do: {:ok, :missing}
+  def exists?(_workspace_path, _worker_host), do: false
+
+  @spec load(Path.t() | nil, String.t() | nil) :: {:ok, artifact()} | {:ok, :missing} | {:error, term()}
+  def load(workspace_path, worker_host \\ nil)
+
+  def load(workspace_path, nil) when is_binary(workspace_path) do
+    path = artifact_path(workspace_path)
+
+    case File.read(path) do
+      {:ok, body} -> parse_artifact(path, body)
+      {:error, :enoent} -> {:ok, :missing}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def load(workspace_path, worker_host) when is_binary(workspace_path) and is_binary(worker_host) do
+    path = artifact_path(workspace_path)
+
+    case SymphonyElixir.SSH.run(worker_host, "cat #{path} 2>/dev/null") do
+      {:ok, body} -> parse_artifact(path, body)
+      {:error, {1, _output}} -> {:ok, :missing}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def load(_workspace_path, _worker_host), do: {:ok, :missing}
+
+  defp parse_artifact(path, body) do
+    case normalize_body(body) do
+      nil -> {:ok, :missing}
+      %{body: normalized_body, reviewed_head_sha: sha} ->
+        {:ok, %{path: path, body: normalized_body, reviewed_head_sha: sha}}
+    end
+  end
 
   defp normalize_body(body) when is_binary(body) do
     case String.trim(body) do

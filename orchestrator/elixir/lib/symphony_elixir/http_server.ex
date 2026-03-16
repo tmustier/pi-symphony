@@ -16,11 +16,18 @@ defmodule SymphonyElixir.HttpServer do
     }
   end
 
+  @startup_retry_delay_ms 2_000
+  @startup_max_retries 5
+
   @spec start_link(keyword()) :: GenServer.on_start() | :ignore
   def start_link(opts \\ []) do
-    case Keyword.get(opts, :port, Config.server_port()) do
+    start_endpoint(opts, 0)
+  end
+
+  defp start_endpoint(opts, attempt) do
+    case Keyword.get(opts, :port, safe_server_port()) do
       port when is_integer(port) and port >= 0 ->
-        host = Keyword.get(opts, :host, Config.settings!().server.host)
+        host = Keyword.get(opts, :host, safe_server_host())
         orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
@@ -43,9 +50,25 @@ defmodule SymphonyElixir.HttpServer do
           Endpoint.start_link()
         end
 
+      _ when attempt < @startup_max_retries ->
+        Process.sleep(@startup_retry_delay_ms)
+        start_endpoint(opts, attempt + 1)
+
       _ ->
         :ignore
     end
+  end
+
+  defp safe_server_port do
+    Config.server_port()
+  rescue
+    _ -> nil
+  end
+
+  defp safe_server_host do
+    Config.settings!().server.host
+  rescue
+    _ -> "127.0.0.1"
   end
 
   @spec bound_port(term()) :: non_neg_integer() | nil
