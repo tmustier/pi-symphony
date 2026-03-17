@@ -1,6 +1,6 @@
 # pi-symphony
 
-Symphony-style unattended issue orchestration for Pi.
+Symphony-style unattended issue orchestration for Pi using Linear.
 
 ## Status
 
