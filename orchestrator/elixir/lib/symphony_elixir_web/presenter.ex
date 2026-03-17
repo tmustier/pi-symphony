@@ -153,6 +153,7 @@ defmodule SymphonyElixirWeb.Presenter do
       rollout_mode: Map.get(entry, :rollout_mode),
       dispatch_allowed: Map.get(entry, :dispatch_allowed, false),
       waiting_reason: Map.get(entry, :waiting_reason),
+      waiting_since: tracked_waiting_since(entry),
       next_intended_action: Map.get(entry, :next_intended_action),
       observed_at: iso8601(Map.get(entry, :observed_at)),
       ownership: Map.get(entry, :ownership, %{}),
@@ -164,6 +165,16 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp tracked_issue_payload(entry), do: tracked_entry_payload(entry)
+
+  defp tracked_waiting_since(entry) do
+    entry
+    |> Map.get(:workpad, %{})
+    |> fetch_value(:metadata)
+    |> case do
+      %{} = metadata -> get_in(metadata, ["waiting", "since"])
+      _ -> nil
+    end
+  end
 
   defp running_issue_payload(running) do
     %{

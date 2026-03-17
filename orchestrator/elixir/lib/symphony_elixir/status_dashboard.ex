@@ -841,10 +841,49 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp tracked_wait_summary(entry) do
     case map_path(entry, [:waiting_reason]) do
-      value when is_binary(value) and value != "" -> value
+      value when is_binary(value) and value != "" ->
+        duration = tracked_wait_duration(entry)
+        if duration, do: "#{value} (#{duration})", else: value
+
+      _ ->
+        nil
+    end
+  end
+
+  defp tracked_wait_duration(entry) do
+    since_str =
+      map_path(entry, [:workpad, :metadata, "waiting", "since"]) ||
+        map_path(entry, [:workpad, "waiting", "since"])
+
+    case parse_iso8601(since_str) do
+      {:ok, since} ->
+        seconds = DateTime.diff(DateTime.utc_now(), since, :second)
+        format_duration(seconds)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp parse_iso8601(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> {:ok, datetime}
       _ -> nil
     end
   end
+
+  defp parse_iso8601(_value), do: nil
+
+  defp format_duration(seconds) when is_integer(seconds) and seconds >= 0 do
+    cond do
+      seconds < 60 -> "#{seconds}s"
+      seconds < 3600 -> "#{div(seconds, 60)}m"
+      seconds < 86400 -> "#{div(seconds, 3600)}h #{div(rem(seconds, 3600), 60)}m"
+      true -> "#{div(seconds, 86400)}d #{div(rem(seconds, 86400), 3600)}h"
+    end
+  end
+
+  defp format_duration(_seconds), do: nil
 
   defp tracked_dependency_summary(entry) do
     blocked_by = Map.get(entry, :blocked_by, [])
