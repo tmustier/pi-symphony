@@ -125,7 +125,7 @@ symphony:
   branch: thomas/tho-2-example
   pr:
     number: 123
-    url: https://github.com/Nexcade/booking-demo/pull/123
+    url: https://github.com/acme/my-app/pull/123
     head_sha: abcdef1
   review:
     comment_id: 456789

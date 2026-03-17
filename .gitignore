@@ -35,5 +35,9 @@ coverage/
 # TypeScript / test artifacts
 /coverage/
 
+# Local workflow configs (may contain org-specific settings)
+/workflows/*.md
+!/workflows/PREFLIGHT.md
+
 # Local agent loop state
 /.ralph/
