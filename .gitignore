@@ -41,3 +41,6 @@ coverage/
 
 # Local agent loop state
 /.ralph/
+
+# Skill local config (user-specific, created from template)
+/skills/pi-symphony/LOCAL.md

@@ -2,6 +2,10 @@
   "name": "pi-symphony",
   "private": true,
   "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "skills": ["./skills"]
+  },
   "packageManager": "pnpm@10.30.2",
   "scripts": {
     "prepare": "lefthook install",
