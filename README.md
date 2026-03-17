@@ -4,7 +4,8 @@ Symphony-style unattended issue orchestration for Pi.
 
 ## Status
 
-Functional — the core orchestration loop, PR automation, and merge execution are implemented. Not yet running in production.
+Agent: Functional — the core orchestration loop, PR automation, and merge execution are implemented. Not yet running in production.
+Translation: **This will let you <s>give in to vibeslop</s> agentically engineer at a new level of abstraction.**
 
 ## What it does
 
