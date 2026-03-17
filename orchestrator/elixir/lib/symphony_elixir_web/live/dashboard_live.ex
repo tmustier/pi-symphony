@@ -252,6 +252,78 @@ defmodule SymphonyElixirWeb.DashboardLive do
             </div>
           <% end %>
         </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Tracked issues</h2>
+              <p class="section-copy">All tracked issues with orchestration state, dependencies, and blocking details.</p>
+            </div>
+          </div>
+
+          <%= if (@payload.tracked || []) == [] do %>
+            <p class="empty-state">No tracked issues.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table" style="min-width: 900px;">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>State</th>
+                    <th>Phase</th>
+                    <th>Dependencies</th>
+                    <th>Waiting</th>
+                    <th>Next action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- @payload.tracked}>
+                    <td>
+                      <div class="issue-stack">
+                        <span class="issue-id"><%= entry.issue_identifier %></span>
+                        <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                      </div>
+                    </td>
+                    <td>
+                      <span class={state_badge_class(entry.state)}>
+                        <%= entry.state %>
+                      </span>
+                    </td>
+                    <td>
+                      <span class={phase_badge_class(entry.phase)}>
+                        <%= entry.phase || "unknown" %>
+                      </span>
+                    </td>
+                    <td>
+                      <div class="detail-stack">
+                        <%= if (entry.blocked_by || []) != [] do %>
+                          <span class="muted">← <%= dep_identifiers(entry.blocked_by) %></span>
+                        <% end %>
+                        <%= if (entry.blocks || []) != [] do %>
+                          <span class="muted">→ <%= dep_identifiers(entry.blocks) %></span>
+                        <% end %>
+                        <%= if (entry.blocked_by || []) == [] and (entry.blocks || []) == [] do %>
+                          <span class="muted">—</span>
+                        <% end %>
+                      </div>
+                    </td>
+                    <td>
+                      <%= if entry.waiting_reason do %>
+                        <span class="muted"><%= entry.waiting_reason %></span>
+                        <%= if waiting_duration(entry) do %>
+                          <br /><span class="muted mono numeric"><%= waiting_duration(entry) %></span>
+                        <% end %>
+                      <% else %>
+                        <span class="muted">—</span>
+                      <% end %>
+                    </td>
+                    <td><span class="muted"><%= entry.next_intended_action || "—" %></span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+        </section>
       <% end %>
     </section>
     """
@@ -352,6 +424,60 @@ defmodule SymphonyElixirWeb.DashboardLive do
       true -> base
     end
   end
+
+  defp phase_badge_class(phase) do
+    base = "state-badge"
+    normalized = phase |> to_string() |> String.downcase()
+
+    cond do
+      normalized in ["blocked"] -> "#{base} state-badge-danger"
+      normalized in ["rework"] -> "#{base} state-badge-warning"
+      String.contains?(normalized, ["waiting", "ready_to_merge"]) -> "#{base} state-badge-active"
+      normalized in ["implementing", "reviewing"] -> base
+      normalized in ["merging"] -> "#{base} state-badge-active"
+      true -> base
+    end
+  end
+
+  defp dep_identifiers(relations) when is_list(relations) do
+    Enum.map_join(relations, ", ", fn
+      %{identifier: id} when is_binary(id) -> id
+      _ -> "?"
+    end)
+  end
+
+  defp dep_identifiers(_), do: ""
+
+  defp waiting_duration(entry) do
+    case parse_iso(entry[:waiting_since]) do
+      {:ok, since} ->
+        seconds = DateTime.diff(DateTime.utc_now(), since, :second)
+        format_wait_duration(seconds)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp parse_iso(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _} -> {:ok, dt}
+      _ -> nil
+    end
+  end
+
+  defp parse_iso(_), do: nil
+
+  defp format_wait_duration(seconds) when is_integer(seconds) and seconds >= 0 do
+    cond do
+      seconds < 60 -> "#{seconds}s"
+      seconds < 3600 -> "#{div(seconds, 60)}m"
+      seconds < 86400 -> "#{div(seconds, 3600)}h #{div(rem(seconds, 3600), 60)}m"
+      true -> "#{div(seconds, 86400)}d #{div(rem(seconds, 86400), 3600)}h"
+    end
+  end
+
+  defp format_wait_duration(_), do: nil
 
   defp schedule_runtime_tick do
     Process.send_after(self(), :runtime_tick, @runtime_tick_ms)
