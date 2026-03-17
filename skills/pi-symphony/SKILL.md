@@ -41,7 +41,7 @@ Symphony needs Linear access both for the orchestrator (polling/mutations) and f
 
 2. Edit the WORKFLOW.md frontmatter — the key fields to configure:
    - `tracker.team_key` — your Linear team prefix (e.g. "THO")
-   - `tracker.project_slug` — optional, narrows to a specific Linear project
+   - `tracker.project_slug` — optional, narrows to a specific Linear project. **Must be the short hash from the project URL** (e.g., `abc123def456` from `https://linear.app/org/project/my-project-abc123def456`), NOT the full UUID or project name. Use `linear.get_project` to find the URL, then extract the trailing hash.
    - `workspace.root` — where symphony creates per-issue workspaces (must exist)
    - `pr.repo_slug` — GitHub `owner/repo` for PR creation
    - `pi.model` and `pi.thinking_level` — which model workers use

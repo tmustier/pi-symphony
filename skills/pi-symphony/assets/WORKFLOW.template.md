@@ -3,7 +3,7 @@ tracker:
   kind: linear
   api_key: "$LINEAR_API_KEY"
   team_key: "CHANGEME"
-  # project_slug: "optional-linear-project-id"
+  # project_slug: "abc123def456"  # Short hash from the Linear project URL (NOT the UUID or project name). Find it at the end of: https://linear.app/<org>/project/<name>-<THIS_PART>
   active_states:
     - Todo
     - In Progress

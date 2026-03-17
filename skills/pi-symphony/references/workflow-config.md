@@ -9,7 +9,7 @@ The WORKFLOW.md file uses YAML frontmatter to configure symphony. Below is the f
 | `kind` | yes | Tracker type. Currently only `linear`. |
 | `api_key` | yes | Linear API key. Use `"$LINEAR_API_KEY"` to read from env. |
 | `team_key` | yes | Linear team prefix (e.g. "THO"). Primary safety boundary. |
-| `project_slug` | no | Linear project ID to narrow within the team. |
+| `project_slug` | no | Linear project slug ID — the short hash at the end of the project URL. For example, if the project URL is `https://linear.app/my-org/project/my-project-abc123def456`, the slug is `abc123def456`. This is **not** the full UUID or the project name. Find it by opening the project in Linear and copying the trailing hash from the URL. |
 | `active_states` | yes | Linear states symphony treats as active (polls and dispatches). |
 | `terminal_states` | yes | Linear states that mean "done" (symphony stops tracking). |
 
