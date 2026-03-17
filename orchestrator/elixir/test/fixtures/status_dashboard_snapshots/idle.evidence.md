@@ -6,6 +6,7 @@
 │ Tokens: in 0 | out 0 | total 0
 │ Rate Limits: unavailable
 │ Rollout: mutate
+│ Model: default
 │ Project: https://linear.app/project/project/issues
 │ Next refresh: n/a
 ├─ Running

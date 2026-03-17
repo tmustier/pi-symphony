@@ -7,6 +7,7 @@ defmodule Mix.Tasks.Symphony.Preflight do
 
   Checks:
     - WORKFLOW.md is present, parseable, and passes semantic validation
+    - Configured model is displayed and validated for known deprecations
     - GitHub CLI (`gh`) is installed and authenticated when the workflow requires GitHub automation
     - Worker extension paths resolve to existing files
     - Kill-switch file path is writable (if configured)
@@ -21,6 +22,7 @@ defmodule Mix.Tasks.Symphony.Preflight do
     results =
       [
         check_workflow_config(),
+        check_model_config(),
         check_gh_cli(),
         check_extension_paths(),
         check_kill_switch_path(),
@@ -73,6 +75,53 @@ defmodule Mix.Tasks.Symphony.Preflight do
 
       {:error, reason} ->
         {:fail, "Workflow config", "cannot load WORKFLOW.md: #{inspect(reason)}"}
+    end
+  end
+
+  @deprecated_models %{
+    "claude-sonnet-4-20250514" => "claude-sonnet-4-20250514 was the launch model — consider claude-sonnet-4",
+    "claude-3-5-sonnet-20241022" => "claude-3-5-sonnet is superseded by claude-sonnet-4",
+    "claude-3-5-sonnet-latest" => "claude-3-5-sonnet is superseded by claude-sonnet-4",
+    "claude-3-opus-20240229" => "claude-3-opus is superseded by claude-opus-4",
+    "claude-3-haiku-20240307" => "claude-3-haiku is superseded by claude-haiku-4"
+  }
+
+  defp check_model_config do
+    case SymphonyElixir.Config.settings() do
+      {:ok, settings} ->
+        check_model(settings)
+
+      {:error, _reason} ->
+        {:warn, "Model", "cannot check — workflow config is invalid"}
+    end
+  end
+
+  defp check_model(settings) do
+    case settings.pi.model do
+      %{provider: provider, model_id: model_id}
+      when is_binary(provider) and is_binary(model_id) ->
+        model_display = "#{provider}/#{model_id}"
+        thinking = settings.pi.thinking_level
+
+        detail =
+          if is_binary(thinking),
+            do: "#{model_display} (thinking: #{thinking})",
+            else: model_display
+
+        deprecation_warning = Map.get(@deprecated_models, model_id)
+
+        if deprecation_warning do
+          [
+            {:warn, "Model", "#{detail} — #{deprecation_warning}"}
+          ]
+        else
+          [
+            {:pass, "Model", detail}
+          ]
+        end
+
+      _ ->
+        {:warn, "Model", "no model configured in pi.model — worker will use its default"}
     end
   end
 

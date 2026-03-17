@@ -367,6 +367,7 @@ defmodule SymphonyElixir.StatusDashboard do
              colorize("total #{format_count(worker_total_tokens)}", @ansi_yellow),
            colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
            format_rollout_mode_line(),
+           format_model_line(),
            project_link_lines,
            project_refresh_line,
            colorize("├─ Running", @ansi_bold),
@@ -442,6 +443,27 @@ defmodule SymphonyElixir.StatusDashboard do
       end
 
     colorize("│ Rollout: ", @ansi_bold) <> colorize(mode, mode_color) <> kill_switch_suffix
+  end
+
+  defp format_model_line do
+    settings = Config.settings!()
+
+    case settings.pi.model do
+      %{provider: provider, model_id: model_id}
+      when is_binary(provider) and is_binary(model_id) ->
+        thinking = settings.pi.thinking_level
+        model_display = "#{provider}/#{model_id}"
+
+        thinking_suffix =
+          if is_binary(thinking),
+            do: colorize(" | ", @ansi_gray) <> colorize("thinking: #{thinking}", @ansi_cyan),
+            else: ""
+
+        colorize("│ Model: ", @ansi_bold) <> colorize(model_display, @ansi_yellow) <> thinking_suffix
+
+      _ ->
+        colorize("│ Model: ", @ansi_bold) <> colorize("default", @ansi_gray)
+    end
   end
 
   defp format_project_refresh_line(%{checking?: true}) do

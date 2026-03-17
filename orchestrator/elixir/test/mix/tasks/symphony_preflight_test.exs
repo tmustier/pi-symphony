@@ -41,4 +41,21 @@ defmodule Mix.Tasks.Symphony.PreflightTest do
       File.rm_rf(fake_bin)
     end
   end
+
+  test "preflight shows configured model and warns on deprecated model IDs" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "observe",
+      pi_model_provider: "anthropic",
+      pi_model_id: "claude-3-5-sonnet-20241022",
+      pi_thinking_level: "high"
+    )
+
+    output = ExUnit.CaptureIO.capture_io(fn -> Preflight.run([]) end)
+
+    assert output =~ "Model"
+    assert output =~ "anthropic/claude-3-5-sonnet-20241022"
+    assert output =~ "thinking: high"
+    assert output =~ "superseded"
+  end
 end
