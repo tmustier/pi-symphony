@@ -33,6 +33,8 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     "tool_unavailable",
     "mergeability_changed",
     "rework_limit_exceeded",
+    "recovery_limit_exceeded",
+    "checks_failed",
     "kill_switch_active",
     "observe_only"
   ]

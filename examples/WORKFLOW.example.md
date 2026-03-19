@@ -81,6 +81,9 @@ review:
     - P0
     - P1
     - P2
+recovery:
+  enabled: true
+  max_attempts: 5
 merge:
   mode: disabled
   executor: land_skill

@@ -28,7 +28,8 @@ defmodule SymphonyElixir.PromptBuilder do
       )
       |> IO.iodata_to_binary()
 
-    maybe_prepend_conflict_instructions(rendered, issue, settings)
+    rendered
+    |> maybe_prepend_recovery_instructions(issue, settings)
   end
 
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
@@ -87,17 +88,50 @@ defmodule SymphonyElixir.PromptBuilder do
     """
   end
 
-  defp maybe_prepend_conflict_instructions(prompt, issue, settings) do
+  defp ci_failure_instructions do
+    """
+    ## URGENT: CI Check Failures — Investigation Required
+
+    The PR for this issue has failing CI checks and cannot be merged.
+
+    Your job is to get this PR into a mergeable state. Investigate what's failing,
+    diagnose the root cause, fix the issues, and push your changes.
+
+    Steps:
+    1. Use `gh pr checks` to see which checks are failing
+    2. Use `gh run view <run_id> --log-failed` to inspect failure logs
+    3. Diagnose and fix the underlying issues in the code
+    4. Run the project's validation/test suite locally to confirm your fixes
+    5. Push your changes
+
+    Preserve the original implementation's intent — do not remove tests, suppress linting,
+    weaken assertions, or discard the original work. The goal is to fix real issues,
+    not to make CI pass by removing validation.
+
+    Do NOT create a new PR — the existing PR will update automatically when you push.
+    """
+  end
+
+  defp maybe_prepend_recovery_instructions(prompt, issue, settings) do
     runtime = OrchestrationPolicy.issue_runtime(issue, settings)
     observation = runtime.workpad.observation
-    mergeability = Map.get(observation, "gates", %{}) |> Map.get("mergeability")
+    gates = Map.get(observation, "gates", %{})
+    mergeability = Map.get(gates, "mergeability")
+    checks = Map.get(gates, "checks")
 
-    if runtime.phase == "rework" and mergeability == "conflict" do
-      merge_conflict_instructions(settings.pr.base_branch) <> "\n" <> prompt
-    else
-      prompt
+    cond do
+      runtime.phase == "rework" and mergeability == "conflict" ->
+        merge_conflict_instructions(settings.pr.base_branch) <> "\n" <> prompt
+
+      runtime.phase == "rework" and checks == "fail" ->
+        ci_failure_instructions() <> "\n" <> prompt
+
+      true ->
+        prompt
     end
   end
+
+
 
   defp default_prompt(prompt) when is_binary(prompt) do
     if String.trim(prompt) == "" do

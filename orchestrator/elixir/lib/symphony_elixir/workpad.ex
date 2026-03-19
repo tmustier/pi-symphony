@@ -136,6 +136,7 @@ defmodule SymphonyElixir.Workpad do
       "owned" => select_owned(runtime, current_metadata, updates, settings),
       "phase" => target_phase,
       "rework_cycles" => select_rework_cycles(current_metadata, updates),
+      "remediation_attempts" => select_remediation_attempts(current_metadata, updates),
       "branch" => select_branch(issue, current_metadata, updates),
       "pr" => merge_section(current_metadata, updates, :pr, default_pr_metadata()),
       "review" => merge_section(current_metadata, updates, :review, default_review_metadata()),
@@ -191,6 +192,27 @@ defmodule SymphonyElixir.Workpad do
           current_cycles + 1
         else
           current_cycles
+        end
+    end
+  end
+
+  defp select_remediation_attempts(current_metadata, updates) do
+    case Map.get(updates, :remediation_attempts) do
+      value when is_integer(value) and value >= 0 ->
+        value
+
+      _ ->
+        current_attempts = fetch_nested_integer(current_metadata, ["remediation_attempts"]) || 0
+        current_phase = fetch_nested_string(current_metadata, ["phase"])
+        target_phase = update_string(updates, :phase)
+        waiting_reason = update_string(updates, :waiting_reason)
+
+        # Increment when entering rework phase due to CI failure or merge conflict recovery
+        if target_phase == "rework" and current_phase != "rework" and
+             waiting_reason in ["checks_failed", "merge_conflict"] do
+          current_attempts + 1
+        else
+          current_attempts
         end
     end
   end
@@ -487,13 +509,14 @@ defmodule SymphonyElixir.Workpad do
       "owned" => 1,
       "phase" => 2,
       "rework_cycles" => 3,
-      "branch" => 4,
-      "pr" => 5,
-      "review" => 6,
-      "merge" => 7,
-      "waiting" => 8,
-      "observation" => 9,
-      "validation" => 10,
+      "remediation_attempts" => 4,
+      "branch" => 5,
+      "pr" => 6,
+      "review" => 7,
+      "merge" => 8,
+      "waiting" => 9,
+      "observation" => 10,
+      "validation" => 11,
       "number" => 0,
       "url" => 1,
       "head_sha" => 2,

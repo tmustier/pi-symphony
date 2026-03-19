@@ -40,6 +40,12 @@ defmodule SymphonyElixir.Config do
   3. If the task is genuinely unclear before any code changes, record a blocker and stop.
   4. Never ask interactive questions. Gather context from the issue, codebase, and branch state.
 
+  Before pushing, rebase your branch against the base branch to avoid merge conflicts:
+  1. `git fetch origin`
+  2. `git rebase origin/{{ policy.pr.base_branch }}`
+  3. Resolve any conflicts if they arise
+  4. Re-run validation after the rebase
+
   If this is a continuation attempt, resume from the current workspace state instead of restarting.
   """
 
