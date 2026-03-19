@@ -198,9 +198,20 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
       rework_cycles_exceeded?(base_updates, runtime, settings) ->
         Map.merge(base_updates, %{phase: "blocked", waiting_reason: "rework_limit_exceeded", next_intended_action: "operator_intervention_required"})
 
+      remediation_attempts_exceeded?(base_updates, runtime, settings) ->
+        Map.merge(base_updates, %{phase: "blocked", waiting_reason: "recovery_limit_exceeded", next_intended_action: "operator_intervention_required"})
+
       true ->
         base_updates
     end
+  end
+
+  defp remediation_attempts_exceeded?(updates, runtime, settings) do
+    phase = Map.get(updates, :phase)
+    max_attempts = settings.recovery.max_attempts
+    current_attempts = current_remediation_attempts(runtime)
+
+    phase == "rework" and is_integer(max_attempts) and current_attempts >= max_attempts
   end
 
   defp rework_cycles_exceeded?(updates, runtime, settings) do
@@ -1209,7 +1220,10 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_phase_after_observation(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "blocked"
+      merge_conflict?(pr_state) and merge_conflict_recovery_exhausted?(runtime, settings) -> "blocked"
       merge_conflict?(pr_state) -> "rework"
+      checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "rework"
+      checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "blocked"
       mergeability_ready?(pr_state) != true -> "waiting_for_checks"
       checks_ready?(pr_state, settings) != true -> "waiting_for_checks"
       review_ready?(review_status, settings) != true -> "waiting_for_checks"
@@ -1219,10 +1233,13 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
-  defp passive_waiting_reason(issue, _runtime, pr_state, review_status, settings) do
+  defp passive_waiting_reason(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "missing_context"
+      merge_conflict?(pr_state) and merge_conflict_recovery_exhausted?(runtime, settings) -> "recovery_limit_exceeded"
       merge_conflict?(pr_state) -> "merge_conflict"
+      checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "checks_failed"
+      checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "recovery_limit_exceeded"
       mergeability_gate(pr_state) == "blocked" -> "mergeability_changed"
       true -> passive_readiness_waiting_reason(issue, pr_state, review_status, settings)
     end
@@ -1241,7 +1258,10 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_next_action(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> non_open_pr_next_action(pr_state)
+      merge_conflict?(pr_state) and merge_conflict_recovery_exhausted?(runtime, settings) -> "operator_intervention_required"
       merge_conflict?(pr_state) -> "rebase_onto_base_branch"
+      checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "resolve_failing_checks"
+      checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "operator_intervention_required"
       mergeability_gate(pr_state) == "blocked" -> "repair_mergeability"
       mergeability_ready?(pr_state) != true -> "poll_on_next_cycle"
       true -> passive_readiness_next_action(issue, runtime, pr_state, review_status, settings)
@@ -1313,6 +1333,48 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp merge_conflict?(pr_state), do: mergeability_gate(pr_state) == "conflict"
 
   defp mergeability_ready?(pr_state), do: mergeability_gate(pr_state) == "pass"
+
+  defp merge_conflict_recovery_exhausted?(runtime, settings) do
+    recovery_enabled?(settings) and recovery_limit_exceeded?(runtime, settings)
+  end
+
+  defp checks_failed_and_recovery_eligible?(pr_state, runtime, settings) do
+    checks_gate(pr_state) == "fail" and
+      settings.merge.require_green_checks == true and
+      recovery_enabled?(settings) and
+      not recovery_limit_exceeded?(runtime, settings)
+  end
+
+  defp checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) do
+    checks_gate(pr_state) == "fail" and
+      settings.merge.require_green_checks == true and
+      recovery_enabled?(settings) and
+      recovery_limit_exceeded?(runtime, settings)
+  end
+
+  defp recovery_enabled?(settings) do
+    settings.recovery.enabled == true and
+      settings.rollout.mode in ["mutate", "merge"]
+  end
+
+  defp recovery_limit_exceeded?(runtime, settings) do
+    max_attempts = settings.recovery.max_attempts
+    current_attempts = current_remediation_attempts(runtime)
+
+    is_integer(max_attempts) and is_integer(current_attempts) and current_attempts >= max_attempts
+  end
+
+  defp current_remediation_attempts(runtime) do
+    runtime
+    |> fetch_value(:workpad)
+    |> fetch_value(:metadata)
+    |> normalize_map()
+    |> Map.get("remediation_attempts")
+    |> case do
+      count when is_integer(count) -> count
+      _ -> 0
+    end
+  end
 
   defp ready_to_merge_promotion_allowed?(settings), do: settings.rollout.mode in ["mutate", "merge"]
 

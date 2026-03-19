@@ -25,7 +25,13 @@ defmodule SymphonyElixir.Config do
 
   Then implement the issue on branch `{{ issue.branch_name }}`. Create it from the base branch if it doesn't exist. Validate your changes the way the project validates itself — run the tests, the linter, the build, whatever applies. Treat non-zero exit codes as real failures.
 
-  After implementing and validating, run a self-review:
+  After implementing and validating, rebase your branch against the base branch to avoid merge conflicts:
+  1. `git fetch origin`
+  2. `git rebase origin/{{ policy.pr.base_branch }}`
+  3. Resolve any conflicts if they arise
+  4. Re-run validation after the rebase to confirm nothing broke
+
+  Then run a self-review on the rebased code:
   1. Get the current HEAD SHA with `git rev-parse HEAD`.
   2. Generate the diff with `git diff origin/{{ policy.pr.base_branch }}...HEAD`.
   3. Run the `pr-reviewer` subagent with the diff to review your changes.

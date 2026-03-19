@@ -455,6 +455,25 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Recovery do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:enabled, :boolean, default: true)
+      field(:max_attempts, :integer, default: 5)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:enabled, :max_attempts], empty_values: [])
+      |> validate_number(:max_attempts, greater_than: 0)
+    end
+  end
+
   defmodule Observability do
     @moduledoc false
     use Ecto.Schema
@@ -508,6 +527,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:pr, Pr, on_replace: :update, defaults_to_struct: true)
     embeds_one(:review, Review, on_replace: :update, defaults_to_struct: true)
     embeds_one(:merge, Merge, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:recovery, Recovery, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
@@ -615,6 +635,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:pr, with: &Pr.changeset/2)
     |> cast_embed(:review, with: &Review.changeset/2)
     |> cast_embed(:merge, with: &Merge.changeset/2)
+    |> cast_embed(:recovery, with: &Recovery.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
@@ -931,7 +952,8 @@ defmodule SymphonyElixir.Config.Schema do
       {"rollout", ["mode", "preflight_required", "kill_switch_label", "kill_switch_file"]},
       {"pr", ["auto_create", "base_branch", "repo_slug", "reuse_branch_pr", "closed_pr_policy", "attach_to_tracker", "required_labels", "review_comment_mode", "review_comment_marker"]},
       {"review", ["enabled", "agent", "output_format", "max_passes", "fix_consideration_severities"]},
-      {"merge", ["mode", "executor", "method", "require_green_checks", "require_head_match", "require_human_approval", "approval_states", "completion_state"]}
+      {"merge", ["mode", "executor", "method", "require_green_checks", "require_head_match", "require_human_approval", "approval_states", "completion_state"]},
+      {"recovery", ["enabled", "max_attempts"]}
     ]
 
     case Enum.find_value(checks, &unknown_key_error(config, &1)) do
