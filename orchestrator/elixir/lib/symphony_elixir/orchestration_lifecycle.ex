@@ -1220,7 +1220,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_phase_after_observation(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "blocked"
-      merge_conflict?(pr_state) -> "rework"
+      merge_conflict?(pr_state) and not recovery_limit_exceeded?(runtime, settings) -> "rework"
+      merge_conflict?(pr_state) and recovery_limit_exceeded?(runtime, settings) -> "blocked"
       checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "rework"
       checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "blocked"
       mergeability_ready?(pr_state) != true -> "waiting_for_checks"
@@ -1235,7 +1236,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_waiting_reason(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "missing_context"
-      merge_conflict?(pr_state) -> "merge_conflict"
+      merge_conflict?(pr_state) and not recovery_limit_exceeded?(runtime, settings) -> "merge_conflict"
+      merge_conflict?(pr_state) and recovery_limit_exceeded?(runtime, settings) -> "recovery_limit_exceeded"
       checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "checks_failed"
       checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "recovery_limit_exceeded"
       mergeability_gate(pr_state) == "blocked" -> "mergeability_changed"
@@ -1256,7 +1258,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_next_action(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> non_open_pr_next_action(pr_state)
-      merge_conflict?(pr_state) -> "rebase_onto_base_branch"
+      merge_conflict?(pr_state) and not recovery_limit_exceeded?(runtime, settings) -> "rebase_onto_base_branch"
+      merge_conflict?(pr_state) and recovery_limit_exceeded?(runtime, settings) -> "operator_intervention_required"
       checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "resolve_failing_checks"
       checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "operator_intervention_required"
       mergeability_gate(pr_state) == "blocked" -> "repair_mergeability"
@@ -1345,7 +1348,6 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp recovery_enabled?(settings) do
     settings.recovery.enabled == true and
-      settings.pr.auto_create == true and
       settings.rollout.mode in ["mutate", "merge"]
   end
 

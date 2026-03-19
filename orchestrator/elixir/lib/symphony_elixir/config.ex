@@ -25,7 +25,13 @@ defmodule SymphonyElixir.Config do
 
   Then implement the issue on branch `{{ issue.branch_name }}`. Create it from the base branch if it doesn't exist. Validate your changes the way the project validates itself — run the tests, the linter, the build, whatever applies. Treat non-zero exit codes as real failures.
 
-  After implementing and validating, run a self-review:
+  After implementing and validating, rebase your branch against the base branch to avoid merge conflicts:
+  1. `git fetch origin`
+  2. `git rebase origin/{{ policy.pr.base_branch }}`
+  3. Resolve any conflicts if they arise
+  4. Re-run validation after the rebase to confirm nothing broke
+
+  Then run a self-review on the rebased code:
   1. Get the current HEAD SHA with `git rev-parse HEAD`.
   2. Generate the diff with `git diff origin/{{ policy.pr.base_branch }}...HEAD`.
   3. Run the `pr-reviewer` subagent with the diff to review your changes.
@@ -39,12 +45,6 @@ defmodule SymphonyElixir.Config do
   2. Never move the issue to a terminal state (Done, Closed, etc). The orchestrator manages tracker transitions.
   3. If the task is genuinely unclear before any code changes, record a blocker and stop.
   4. Never ask interactive questions. Gather context from the issue, codebase, and branch state.
-
-  Before pushing, rebase your branch against the base branch to avoid merge conflicts:
-  1. `git fetch origin`
-  2. `git rebase origin/{{ policy.pr.base_branch }}`
-  3. Resolve any conflicts if they arise
-  4. Re-run validation after the rebase
 
   If this is a continuation attempt, resume from the current workspace state instead of restarting.
   """
