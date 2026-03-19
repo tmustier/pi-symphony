@@ -1220,8 +1220,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_phase_after_observation(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "blocked"
-      merge_conflict?(pr_state) and not recovery_limit_exceeded?(runtime, settings) -> "rework"
-      merge_conflict?(pr_state) and recovery_limit_exceeded?(runtime, settings) -> "blocked"
+      merge_conflict?(pr_state) and merge_conflict_recovery_exhausted?(runtime, settings) -> "blocked"
+      merge_conflict?(pr_state) -> "rework"
       checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "rework"
       checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "blocked"
       mergeability_ready?(pr_state) != true -> "waiting_for_checks"
@@ -1236,8 +1236,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_waiting_reason(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "missing_context"
-      merge_conflict?(pr_state) and not recovery_limit_exceeded?(runtime, settings) -> "merge_conflict"
-      merge_conflict?(pr_state) and recovery_limit_exceeded?(runtime, settings) -> "recovery_limit_exceeded"
+      merge_conflict?(pr_state) and merge_conflict_recovery_exhausted?(runtime, settings) -> "recovery_limit_exceeded"
+      merge_conflict?(pr_state) -> "merge_conflict"
       checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "checks_failed"
       checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "recovery_limit_exceeded"
       mergeability_gate(pr_state) == "blocked" -> "mergeability_changed"
@@ -1258,8 +1258,8 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   defp passive_next_action(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> non_open_pr_next_action(pr_state)
-      merge_conflict?(pr_state) and not recovery_limit_exceeded?(runtime, settings) -> "rebase_onto_base_branch"
-      merge_conflict?(pr_state) and recovery_limit_exceeded?(runtime, settings) -> "operator_intervention_required"
+      merge_conflict?(pr_state) and merge_conflict_recovery_exhausted?(runtime, settings) -> "operator_intervention_required"
+      merge_conflict?(pr_state) -> "rebase_onto_base_branch"
       checks_failed_and_recovery_eligible?(pr_state, runtime, settings) -> "resolve_failing_checks"
       checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) -> "operator_intervention_required"
       mergeability_gate(pr_state) == "blocked" -> "repair_mergeability"
@@ -1334,14 +1334,20 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp mergeability_ready?(pr_state), do: mergeability_gate(pr_state) == "pass"
 
+  defp merge_conflict_recovery_exhausted?(runtime, settings) do
+    recovery_enabled?(settings) and recovery_limit_exceeded?(runtime, settings)
+  end
+
   defp checks_failed_and_recovery_eligible?(pr_state, runtime, settings) do
     checks_gate(pr_state) == "fail" and
+      settings.merge.require_green_checks == true and
       recovery_enabled?(settings) and
       not recovery_limit_exceeded?(runtime, settings)
   end
 
   defp checks_failed_and_recovery_exhausted?(pr_state, runtime, settings) do
     checks_gate(pr_state) == "fail" and
+      settings.merge.require_green_checks == true and
       recovery_enabled?(settings) and
       recovery_limit_exceeded?(runtime, settings)
   end
