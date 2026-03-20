@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.OrchestratorStatusTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.MergeQueue
+
   test "snapshot returns :timeout when snapshot server is unresponsive" do
     server_name = Module.concat(__MODULE__, :UnresponsiveSnapshotServer)
     parent = self()
@@ -1605,6 +1607,56 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              "agent message streaming: writing workpad reconciliation update"
 
     assert StatusDashboard.humanize_codex_message(fallback_reasoning) == "reasoning update"
+  end
+
+  test "tracked_pr_context falls back to repo slug parsed from PR url" do
+    tracked_entry = %{
+      workpad: %{
+        metadata: %{
+          "pr" => %{
+            "number" => 104,
+            "url" => "https://github.com/acme/widgets/pull/104",
+            "head_sha" => "abc123"
+          }
+        }
+      }
+    }
+
+    assert Orchestrator.tracked_pr_context_for_test(tracked_entry) == %{
+             number: 104,
+             url: "https://github.com/acme/widgets/pull/104",
+             repo_slug: "acme/widgets",
+             expected_head_sha: "abc123"
+           }
+  end
+
+  test "build_rebase_targets only includes queued PRs that are not actively running" do
+    queue =
+      %{}
+      |> MergeQueue.add("issue-queued", %{number: 201, url: "https://github.com/acme/widgets/pull/201", repo_slug: "acme/widgets"}, 1,
+        issue_identifier: "MT-QUEUED",
+        enqueued_at_ms: 100
+      )
+      |> MergeQueue.add("issue-running", %{number: 202, url: "https://github.com/acme/widgets/pull/202", repo_slug: "acme/widgets"}, 2,
+        issue_identifier: "MT-RUNNING",
+        enqueued_at_ms: 200
+      )
+
+    state = %Orchestrator.State{
+      running: %{"issue-running" => %{}}
+    }
+
+    assert Orchestrator.build_rebase_targets_for_test(queue, state) == [
+             %{
+               issue_id: "issue-queued",
+               issue_identifier: "MT-QUEUED",
+               pr_context: %{
+                 number: 201,
+                 url: "https://github.com/acme/widgets/pull/201",
+                 repo_slug: "acme/widgets"
+               }
+             }
+           ]
   end
 
   test "application stop renders offline status" do

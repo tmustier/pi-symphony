@@ -392,12 +392,13 @@ defmodule SymphonyElixir.Orchestrator do
     pr_number = Map.get(pr_metadata, "number")
     pr_url = Map.get(pr_metadata, "url")
     head_sha = Map.get(pr_metadata, "head_sha")
+    repo_slug = first_present_string([Config.settings!().pr.repo_slug, repo_slug_from_pr_url(pr_url)])
 
     if is_integer(pr_number) or is_binary(pr_url) do
       %{
         number: pr_number,
         url: pr_url,
-        repo_slug: Config.settings!().pr.repo_slug,
+        repo_slug: repo_slug,
         expected_head_sha: head_sha
       }
     end
@@ -416,7 +417,7 @@ defmodule SymphonyElixir.Orchestrator do
     if merge_queue_enabled?() do
       case MergeQueue.take_next(state.merge_queue) do
         {%{issue_id: issue_id} = entry, next_queue} ->
-          rebase_targets = build_rebase_targets(state, issue_id)
+          rebase_targets = build_rebase_targets(next_queue, state)
 
           task =
             Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
@@ -437,38 +438,44 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp build_rebase_targets(%State{} = state, current_issue_id) when is_binary(current_issue_id) do
+  defp build_rebase_targets(merge_queue, %State{} = state) when is_map(merge_queue) do
     running_ids = Map.keys(state.running) |> MapSet.new()
 
-    state.tracked
-    |> Map.values()
-    |> Enum.reject(fn entry ->
-      Map.get(entry, :issue_id) == current_issue_id or
-        MapSet.member?(running_ids, Map.get(entry, :issue_id)) or
-        not tracked_pr_open?(entry)
+    merge_queue
+    |> MergeQueue.ordered_entries()
+    |> Enum.reject(&MapSet.member?(running_ids, &1.issue_id))
+    |> Enum.map(fn entry ->
+      %{
+        issue_id: entry.issue_id,
+        issue_identifier: entry.issue_identifier,
+        pr_context: entry.pr_context
+      }
     end)
-    |> Enum.flat_map(fn entry ->
-      case tracked_pr_context(entry) do
-        %{} = pr_context ->
-          [
-            %{
-              issue_id: Map.get(entry, :issue_id),
-              issue_identifier: Map.get(entry, :issue_identifier),
-              pr_context: pr_context
-            }
-          ]
+    |> Enum.filter(&is_map(&1.pr_context))
+  end
 
-        _ ->
-          []
-      end
+  defp build_rebase_targets(_merge_queue, _state), do: []
+
+  defp first_present_string(values) when is_list(values) do
+    Enum.find(values, fn value ->
+      is_binary(value) and String.trim(value) != ""
     end)
   end
 
-  defp tracked_pr_open?(entry) when is_map(entry) do
-    get_in(entry, [:workpad, :observation, "gates", "pr"]) not in ["merged", "closed"]
+  defp repo_slug_from_pr_url(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{host: host, path: path} when host in ["github.com", "www.github.com"] and is_binary(path) ->
+        case String.split(String.trim_leading(path, "/"), "/", trim: true) do
+          [owner, repo, "pull", _pr_number | _rest] -> "#{owner}/#{repo}"
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
   end
 
-  defp tracked_pr_open?(_entry), do: false
+  defp repo_slug_from_pr_url(_url), do: nil
 
   defp process_merge_task(issue_id, rebase_targets) when is_binary(issue_id) and is_list(rebase_targets) do
     merge_result = OrchestrationLifecycle.reconcile_after_run(issue_id, %{}, queue_merge: true)
@@ -691,6 +698,20 @@ defmodule SymphonyElixir.Orchestrator do
   def reconcile_candidate_issue_lifecycles_for_test(issues, _state) when is_list(issues) do
     issues
   end
+
+  @doc false
+  @spec tracked_pr_context_for_test(map()) :: map() | nil
+  def tracked_pr_context_for_test(tracked_entry) when is_map(tracked_entry) do
+    tracked_pr_context(tracked_entry)
+  end
+
+  @doc false
+  @spec build_rebase_targets_for_test(map(), term()) :: [map()]
+  def build_rebase_targets_for_test(merge_queue, %State{} = state) when is_map(merge_queue) do
+    build_rebase_targets(merge_queue, state)
+  end
+
+  def build_rebase_targets_for_test(_merge_queue, _state), do: []
 
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
 
