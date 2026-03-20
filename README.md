@@ -15,6 +15,7 @@ Translation: **This will let you <s>give in to vibeslop</s> agentically engineer
 - Lets the worker implement autonomously within repo-defined policy
 - Manages the full PR lifecycle: create/reuse PRs, self-review, merge execution
 - Captures proof-of-work artifacts and surfaces status through a dashboard and JSON API
+- Writes local-first `symphony_run` analytics extracts for worker attempts under the run logs root
 - Retries, reconciles, and recovers safely
 
 ## Architecture

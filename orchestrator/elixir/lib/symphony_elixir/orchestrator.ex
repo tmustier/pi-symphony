@@ -12,6 +12,7 @@ defmodule SymphonyElixir.Orchestrator do
     MergeQueue,
     OrchestrationLifecycle,
     OrchestrationPolicy,
+    PiAnalytics,
     PullRequests,
     StatusDashboard,
     Tracker,
@@ -161,36 +162,51 @@ defmodule SymphonyElixir.Orchestrator do
         state = record_session_completion_totals(state, running_entry)
         session_id = running_entry_session_id(running_entry)
 
-        state =
+        {state, analytics_status, analytics_note} =
           case reason do
             :normal ->
               Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; evaluating continuation policy")
 
-              state
-              |> complete_issue(issue_id)
-              |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
-              |> maybe_schedule_continuation_retry(issue_id, running_entry)
+              updated_state =
+                state
+                |> complete_issue(issue_id)
+                |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
+                |> maybe_schedule_continuation_retry(issue_id, running_entry)
+
+              if retry_scheduled?(updated_state, issue_id) do
+                {updated_state, "waiting", "continuation_retry_scheduled"}
+              else
+                {updated_state, "success", "agent_task_completed"}
+              end
 
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
               next_attempt = Retry.next_retry_attempt_from_running(running_entry)
 
-              Retry.schedule_issue_retry(
-                state,
-                issue_id,
-                next_attempt,
-                Map.merge(
-                  %{
-                    identifier: running_entry.identifier,
-                    error: "agent exited: #{inspect(reason)}",
-                    worker_host: Map.get(running_entry, :worker_host),
-                    workspace_path: Map.get(running_entry, :workspace_path)
-                  },
-                  Retry.retry_runtime_metadata(running_entry)
+              updated_state =
+                Retry.schedule_issue_retry(
+                  state,
+                  issue_id,
+                  next_attempt,
+                  Map.merge(
+                    %{
+                      identifier: running_entry.identifier,
+                      error: "agent exited: #{inspect(reason)}",
+                      worker_host: Map.get(running_entry, :worker_host),
+                      workspace_path: Map.get(running_entry, :workspace_path)
+                    },
+                    Retry.retry_runtime_metadata(running_entry)
+                  )
                 )
-              )
+
+              {updated_state, "error", "agent_task_exited"}
           end
+
+        emit_symphony_run_analytics(running_entry, analytics_status, analytics_note, %{
+          retry_scheduled: retry_scheduled?(state, issue_id),
+          process_exit_reason: inspect(reason)
+        })
 
         Logger.info("Agent task finished for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
 
@@ -775,17 +791,17 @@ defmodule SymphonyElixir.Orchestrator do
       Dispatch.terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue moved to terminal state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
-        terminate_running_issue(state, issue.id, true)
+        terminate_running_issue(state, issue.id, true, :terminal_state, %{})
 
       !Dispatch.issue_routable_to_worker?(issue) ->
         Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
 
-        terminate_running_issue(state, issue.id, false)
+        terminate_running_issue(state, issue.id, false, :worker_unassigned, %{})
 
       Dispatch.active_issue_state?(issue.state, active_states) and not Dispatch.dispatch_allowed_by_policy?(issue) ->
         Logger.info("Issue failed orchestration policy gates: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
-        terminate_running_issue(state, issue.id, false)
+        terminate_running_issue(state, issue.id, false, :policy_gate_failed, %{})
 
       Dispatch.active_issue_state?(issue.state, active_states) ->
         refresh_running_issue_state(state, issue)
@@ -793,7 +809,7 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         Logger.info("Issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
-        terminate_running_issue(state, issue.id, false)
+        terminate_running_issue(state, issue.id, false, :non_active_state, %{})
     end
   end
 
@@ -814,7 +830,7 @@ defmodule SymphonyElixir.Orchestrator do
         state_acc
       else
         log_missing_running_issue(state_acc, issue_id)
-        terminate_running_issue(state_acc, issue_id, false)
+        terminate_running_issue(state_acc, issue_id, false, :issue_no_longer_visible, %{})
       end
     end)
   end
@@ -843,7 +859,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp terminate_running_issue(%State{} = state, issue_id, cleanup_workspace) do
+  defp terminate_running_issue(%State{} = state, issue_id, cleanup_workspace, termination_reason, analytics_metrics) do
     case Map.get(state.running, issue_id) do
       nil ->
         release_issue_claim(state, issue_id)
@@ -855,6 +871,20 @@ defmodule SymphonyElixir.Orchestrator do
         if cleanup_workspace do
           cleanup_issue_workspace(identifier, worker_host)
         end
+
+        emit_symphony_run_analytics(
+          running_entry,
+          "cancelled",
+          termination_note(termination_reason),
+          Map.merge(
+            %{
+              cleanup_workspace: cleanup_workspace,
+              termination_reason: termination_reason,
+              process_exit_reason: "terminated_by_orchestrator"
+            },
+            analytics_metrics
+          )
+        )
 
         if is_pid(pid) do
           terminate_task(pid)
@@ -907,7 +937,7 @@ defmodule SymphonyElixir.Orchestrator do
       next_attempt = Retry.next_retry_attempt_from_running(running_entry)
 
       state
-      |> terminate_running_issue(issue_id, false)
+      |> terminate_running_issue(issue_id, false, :stall_timeout, %{retry_scheduled: true})
       |> Retry.schedule_issue_retry(
         issue_id,
         next_attempt,
@@ -1475,6 +1505,26 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp record_session_completion_totals(state, _running_entry), do: state
+
+  defp emit_symphony_run_analytics(running_entry, status, note, metrics) when is_map(running_entry) do
+    PiAnalytics.emit_symphony_run(running_entry,
+      status: status,
+      notes: note,
+      metrics: metrics
+    )
+  end
+
+  defp emit_symphony_run_analytics(_running_entry, _status, _note, _metrics), do: :ok
+
+  defp retry_scheduled?(%State{} = state, issue_id) when is_binary(issue_id) do
+    Map.has_key?(state.retry_attempts, issue_id)
+  end
+
+  defp retry_scheduled?(_state, _issue_id), do: false
+
+  defp termination_note(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp termination_note(reason) when is_binary(reason), do: reason
+  defp termination_note(reason), do: inspect(reason)
 
   defp refresh_runtime_config(%State{} = state) do
     config = Config.settings!()

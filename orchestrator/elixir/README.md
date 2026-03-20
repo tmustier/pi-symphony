@@ -78,6 +78,21 @@ Optional flags:
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
 
+When analytics emission is enabled (default), Symphony also writes a local worker-attempt extract to:
+
+- `<logs-root>/pi-analytics/YYYY-MM-DD.jsonl`
+
+The same records can optionally be mirrored to a home-scoped aggregate ledger:
+
+- `~/.pi/analytics/events/YYYY-MM-DD.jsonl`
+
+Environment overrides:
+
+- `PI_ANALYTICS_ENABLED=0` — disable analytics emission entirely
+- `PI_ANALYTICS_LOCAL_DIR=/path/to/pi-analytics` — override the local extract directory
+- `PI_ANALYTICS_MIRROR_HOME=0` — keep only the local extract
+- `PI_ANALYTICS_LEDGER_ROOT=/path/to/home-ledger-root` — override the mirrored home ledger root
+
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
 Codex session prompt.
 
