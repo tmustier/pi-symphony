@@ -417,8 +417,6 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp tracked_pr_context(_tracked_entry), do: nil
-
   defp maybe_start_merge_task(%State{merge_in_progress: issue_id} = state) when is_binary(issue_id),
     do: state
 
@@ -479,8 +477,6 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.filter(&is_map(&1.pr_context))
   end
 
-  defp build_rebase_targets(_merge_queue, _state), do: []
-
   defp first_present_string(values) when is_list(values) do
     Enum.find(values, fn value ->
       is_binary(value) and String.trim(value) != ""
@@ -531,8 +527,6 @@ defmodule SymphonyElixir.Orchestrator do
     |> is_binary()
   end
 
-  defp merge_successful_issue?(_issue), do: false
-
   defp auto_rebase_targets(targets) when is_list(targets) do
     max_attempts = Config.settings!().merge.max_rebase_attempts
 
@@ -570,7 +564,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp refresh_issue_after_rebase(_issue_id), do: nil
 
   defp complete_merge_task(%State{} = state, _issue_id, %{updated_issue: updated_issue, rebased_issues: rebased_issues} = result) do
-    state = maybe_update_merge_task_issue(state, updated_issue)
+    state = update_merge_task_issue(state, updated_issue)
     state = Enum.reduce(rebased_issues, state, &maybe_update_rebased_issue(&2, &1))
 
     if Map.get(result, :merge_completed?) do
@@ -587,8 +581,8 @@ defmodule SymphonyElixir.Orchestrator do
     requeue_current_merge_entry(state)
   end
 
-  defp maybe_update_merge_task_issue(state, %Issue{} = issue), do: update_tracked_issue(state, issue)
-  defp maybe_update_merge_task_issue(state, _issue), do: state
+  defp update_merge_task_issue(state, %Issue{} = issue), do: update_tracked_issue(state, issue)
+  defp update_merge_task_issue(state, _updated_issue), do: state
 
   defp maybe_update_rebased_issue(state, %{refreshed_issue: %Issue{} = issue}), do: update_tracked_issue(state, issue)
   defp maybe_update_rebased_issue(state, _entry), do: state

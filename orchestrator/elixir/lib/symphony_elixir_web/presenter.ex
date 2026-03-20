@@ -365,8 +365,6 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
-  defp merge_payload(_merge), do: %{in_progress_issue_id: nil, in_progress_issue_identifier: nil, queued: []}
-
   defp maybe_put(payload, _key, nil), do: payload
   defp maybe_put(payload, key, value), do: Map.put(payload, key, value)
 

@@ -253,7 +253,6 @@ defmodule SymphonyElixir.PullRequests do
       {:ok, _output} ->
         case inspect_pull_request_state(context, runner) do
           {:ok, pr_state} -> {:ok, rebase_success(pr_state, context)}
-          {:skip, _details} = skip -> skip
           {:error, reason} -> {:error, reason}
         end
 
