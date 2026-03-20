@@ -18,6 +18,10 @@
 │
 │  \e[90mNo queued retries\e[0m
 │
+\e[1m├─ Merge queue\e[0m
+│
+│  \e[90mNo queued merges\e[0m
+│
 \e[1m├─ Passive queue\e[0m
 │
 │  \e[36m◌\e[0m \e[36mMT-880\e[0m \e[36mIn Review | waiting_for_checks | checks_pending | pr=#113@abc123d | review=r1@abc123d | merge=attempted...\e[0m

@@ -404,6 +404,8 @@ defmodule SymphonyElixir.Config.Schema do
       field(:mode, :string, default: "disabled")
       field(:executor, :string)
       field(:method, :string, default: "squash")
+      field(:strategy, :string)
+      field(:max_rebase_attempts, :integer, default: 2)
       field(:require_green_checks, :boolean, default: true)
       field(:require_head_match, :boolean, default: true)
       field(:require_human_approval, :boolean, default: true)
@@ -420,6 +422,8 @@ defmodule SymphonyElixir.Config.Schema do
           :mode,
           :executor,
           :method,
+          :strategy,
+          :max_rebase_attempts,
           :require_green_checks,
           :require_head_match,
           :require_human_approval,
@@ -430,6 +434,8 @@ defmodule SymphonyElixir.Config.Schema do
       )
       |> validate_inclusion(:mode, OrchestrationPolicy.merge_modes())
       |> validate_inclusion(:method, OrchestrationPolicy.merge_methods())
+      |> validate_inclusion(:strategy, OrchestrationPolicy.merge_strategies())
+      |> validate_number(:max_rebase_attempts, greater_than: 0)
     end
   end
 
@@ -641,6 +647,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:server, with: &Server.changeset/2)
   end
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp finalize_settings(settings) do
     tracker = %{
       settings.tracker
@@ -707,6 +714,9 @@ defmodule SymphonyElixir.Config.Schema do
       | mode: normalize_optional_string(settings.merge.mode) || "disabled",
         executor: normalize_optional_string(settings.merge.executor),
         method: normalize_optional_string(settings.merge.method) || "squash",
+        strategy:
+          normalize_optional_string(settings.merge.strategy) ||
+            default_merge_strategy(normalize_optional_string(settings.merge.mode) || "disabled"),
         approval_states: normalize_string_list(settings.merge.approval_states),
         completion_state: normalize_optional_string(settings.merge.completion_state)
     }
@@ -945,6 +955,9 @@ defmodule SymphonyElixir.Config.Schema do
     Path.expand(Path.join(System.tmp_dir!(), "symphony_workspaces"))
   end
 
+  defp default_merge_strategy("auto"), do: "queue"
+  defp default_merge_strategy(_mode), do: "immediate"
+
   defp validate_policy_unknown_keys(config) when is_map(config) do
     checks = [
       {"orchestration", ["phase_store", "default_phase", "passive_phases", "max_rework_cycles", "ownership"]},
@@ -952,7 +965,7 @@ defmodule SymphonyElixir.Config.Schema do
       {"rollout", ["mode", "preflight_required", "kill_switch_label", "kill_switch_file"]},
       {"pr", ["auto_create", "base_branch", "repo_slug", "reuse_branch_pr", "closed_pr_policy", "attach_to_tracker", "required_labels", "review_comment_mode", "review_comment_marker"]},
       {"review", ["enabled", "agent", "output_format", "max_passes", "fix_consideration_severities"]},
-      {"merge", ["mode", "executor", "method", "require_green_checks", "require_head_match", "require_human_approval", "approval_states", "completion_state"]},
+      {"merge", ["mode", "executor", "method", "strategy", "max_rebase_attempts", "require_green_checks", "require_head_match", "require_human_approval", "approval_states", "completion_state"]},
       {"recovery", ["enabled", "max_attempts"]}
     ]
 

@@ -38,6 +38,7 @@ defmodule SymphonyElixir.TestSupport do
 
         File.mkdir_p!(workflow_root)
         workflow_file = Path.join(workflow_root, "WORKFLOW.md")
+        {:ok, _apps} = Application.ensure_all_started(:symphony_elixir)
         write_workflow_file!(workflow_file)
         Workflow.set_workflow_file_path(workflow_file)
         if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
@@ -75,11 +76,8 @@ defmodule SymphonyElixir.TestSupport do
   def restore_env(key, value), do: System.put_env(key, value)
 
   def stop_default_http_server do
-    case Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn
-           {SymphonyElixir.HttpServer, _pid, _type, _modules} -> true
-           _child -> false
-         end) do
-      {SymphonyElixir.HttpServer, pid, _type, _modules} when is_pid(pid) ->
+    case default_http_server_pid() do
+      pid when is_pid(pid) ->
         :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.HttpServer)
 
         if Process.alive?(pid) do
@@ -90,6 +88,21 @@ defmodule SymphonyElixir.TestSupport do
 
       _ ->
         :ok
+    end
+  end
+
+  defp default_http_server_pid do
+    case Process.whereis(SymphonyElixir.Supervisor) do
+      pid when is_pid(pid) ->
+        SymphonyElixir.Supervisor
+        |> Supervisor.which_children()
+        |> Enum.find_value(fn
+          {SymphonyElixir.HttpServer, child_pid, _type, _modules} when is_pid(child_pid) -> child_pid
+          _child -> nil
+        end)
+
+      _ ->
+        nil
     end
   end
 
@@ -157,6 +170,8 @@ defmodule SymphonyElixir.TestSupport do
           merge_mode: "disabled",
           merge_executor: nil,
           merge_method: "squash",
+          merge_strategy: nil,
+          merge_max_rebase_attempts: 2,
           merge_require_green_checks: true,
           merge_require_head_match: true,
           merge_require_human_approval: true,
@@ -237,6 +252,8 @@ defmodule SymphonyElixir.TestSupport do
     merge_mode = Keyword.get(config, :merge_mode)
     merge_executor = Keyword.get(config, :merge_executor)
     merge_method = Keyword.get(config, :merge_method)
+    merge_strategy = Keyword.get(config, :merge_strategy)
+    merge_max_rebase_attempts = Keyword.get(config, :merge_max_rebase_attempts)
     merge_require_green_checks = Keyword.get(config, :merge_require_green_checks)
     merge_require_head_match = Keyword.get(config, :merge_require_head_match)
     merge_require_human_approval = Keyword.get(config, :merge_require_human_approval)
@@ -331,6 +348,8 @@ defmodule SymphonyElixir.TestSupport do
           mode: merge_mode,
           executor: merge_executor,
           method: merge_method,
+          strategy: merge_strategy,
+          max_rebase_attempts: merge_max_rebase_attempts,
           require_green_checks: merge_require_green_checks,
           require_head_match: merge_require_head_match,
           require_human_approval: merge_require_human_approval,
@@ -430,6 +449,8 @@ defmodule SymphonyElixir.TestSupport do
       "  mode: #{yaml_value(config.mode)}",
       "  executor: #{yaml_value(config.executor)}",
       "  method: #{yaml_value(config.method)}",
+      "  strategy: #{yaml_value(config.strategy)}",
+      "  max_rebase_attempts: #{yaml_value(config.max_rebase_attempts)}",
       "  require_green_checks: #{yaml_value(config.require_green_checks)}",
       "  require_head_match: #{yaml_value(config.require_head_match)}",
       "  require_human_approval: #{yaml_value(config.require_human_approval)}",

@@ -18,4 +18,8 @@
 \e[1m├─ Backoff queue\e[0m
 │
 │  \e[90mNo queued retries\e[0m
+│
+\e[1m├─ Merge queue\e[0m
+│
+│  \e[90mNo queued merges\e[0m
 ╰─

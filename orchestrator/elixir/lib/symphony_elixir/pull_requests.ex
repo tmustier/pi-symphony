@@ -12,6 +12,7 @@ defmodule SymphonyElixir.PullRequests do
   @type pr_state_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
   @type review_comment_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
   @type merge_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
+  @type rebase_result :: {:ok, map()} | {:skip, map()} | {:error, term()}
 
   @doc false
   @spec resolve_or_create_for_test(Issue.t(), map(), keyword()) :: pr_result()
@@ -28,6 +29,10 @@ defmodule SymphonyElixir.PullRequests do
   @doc false
   @spec merge_if_head_matches_for_test(map(), keyword()) :: merge_result()
   def merge_if_head_matches_for_test(pr_context, opts \\ []), do: merge_if_head_matches(pr_context, opts)
+
+  @doc false
+  @spec rebase_pr_for_test(map(), keyword()) :: rebase_result()
+  def rebase_pr_for_test(pr_context, opts \\ []), do: rebase_pr(pr_context, opts)
 
   @spec resolve_or_create(Issue.t(), map(), keyword()) :: pr_result()
   def resolve_or_create(%Issue{} = issue, git_state, opts \\ []) when is_map(git_state) and is_list(opts) do
@@ -99,6 +104,21 @@ defmodule SymphonyElixir.PullRequests do
     end
   end
 
+  @spec rebase_pr(map(), keyword()) :: rebase_result()
+  def rebase_pr(pr_context, opts \\ []) when is_map(pr_context) and is_list(opts) do
+    settings = Keyword.get(opts, :settings, Config.settings!())
+    runner = Keyword.get(opts, :runner, command_runner())
+    context = merge_context(pr_context, settings, opts)
+
+    case rebase_skip_result(context) do
+      nil ->
+        rebase_pull_request(context, runner)
+
+      result ->
+        {:skip, result}
+    end
+  end
+
   defp review_comment_skip_result(context, settings, normalized_body) do
     review_comment_mode_skip(settings) ||
       review_comment_mutation_skip(settings) ||
@@ -142,6 +162,19 @@ defmodule SymphonyElixir.PullRequests do
       merge_rollout_skip(settings) ||
       merge_executor_skip(context) ||
       merge_context_skip(context, settings)
+  end
+
+  defp rebase_skip_result(context) do
+    cond do
+      is_nil(context.repo_slug) ->
+        %{reason: :missing_repo_slug, next_intended_action: "record_repo_context"}
+
+      is_nil(context.pr_number) ->
+        %{reason: :missing_pr_number, next_intended_action: "record_pr_context"}
+
+      true ->
+        nil
+    end
   end
 
   defp merge_mode_skip(settings) do
@@ -203,6 +236,28 @@ defmodule SymphonyElixir.PullRequests do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp rebase_pull_request(context, runner) do
+    args =
+      [
+        "api",
+        "repos/#{context.repo_slug}/pulls/#{context.pr_number}/update-branch",
+        "--method",
+        "PUT"
+      ]
+      |> maybe_put_expected_head_arg(context.expected_head_sha)
+
+    case runner.("gh", args, []) do
+      {:ok, _output} ->
+        case inspect_pull_request_state(context, runner) do
+          {:ok, pr_state} -> {:ok, rebase_success(pr_state, context)}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        rebase_error_result(reason, context)
     end
   end
 
@@ -333,6 +388,12 @@ defmodule SymphonyElixir.PullRequests do
     args ++ ["--match-head-commit", expected_head_sha]
   end
 
+  defp maybe_put_expected_head_arg(args, nil), do: args
+
+  defp maybe_put_expected_head_arg(args, expected_head_sha) when is_binary(expected_head_sha) do
+    args ++ ["-f", "expected_head_sha=#{expected_head_sha}"]
+  end
+
   defp merge_success(pr_state, context) do
     %{
       action: :merged,
@@ -346,6 +407,35 @@ defmodule SymphonyElixir.PullRequests do
       pr_state: pr_state
     }
   end
+
+  defp rebase_success(pr_state, context) do
+    %{
+      action: :rebased,
+      pr_number: context.pr_number,
+      repo_slug: context.repo_slug,
+      url: pr_state.url,
+      state: pr_state.state,
+      head_sha: pr_state.head_sha,
+      expected_head_sha: context.expected_head_sha,
+      pr_state: pr_state
+    }
+  end
+
+  defp rebase_error_result(reason, context) do
+    if merge_conflict_error?(reason) do
+      {:skip, merge_skip(:merge_conflict, context, "rebase_onto_base_branch", %{})}
+    else
+      {:error, reason}
+    end
+  end
+
+  defp merge_conflict_error?({status, output}) when status in [409, 422] and is_binary(output) do
+    normalized = String.downcase(output)
+    String.contains?(normalized, ["conflict", "update branch", "merge branch", "not possible"])
+  end
+
+  defp merge_conflict_error?({status, _output}) when status in [409, 422], do: true
+  defp merge_conflict_error?(_reason), do: false
 
   defp resolve_from_existing_prs(issue, context, prs, settings, runner) do
     open_pr = Enum.find(prs, &(&1.state == "OPEN"))

@@ -25,13 +25,9 @@ defmodule SymphonyElixir.Config do
 
   Then implement the issue on branch `{{ issue.branch_name }}`. Create it from the base branch if it doesn't exist. Validate your changes the way the project validates itself — run the tests, the linter, the build, whatever applies. Treat non-zero exit codes as real failures.
 
-  After implementing and validating, rebase your branch against the base branch to avoid merge conflicts:
-  1. `git fetch origin`
-  2. `git rebase origin/{{ policy.pr.base_branch }}`
-  3. Resolve any conflicts if they arise
-  4. Re-run validation after the rebase to confirm nothing broke
+  Do not spend turns rebasing against the base branch at the end of the task. The orchestrator manages integration and merge sequencing.
 
-  Then run a self-review on the rebased code:
+  Then run a self-review on the code you are about to push:
   1. Get the current HEAD SHA with `git rev-parse HEAD`.
   2. Generate the diff with `git diff origin/{{ policy.pr.base_branch }}...HEAD`.
   3. Run the `pr-reviewer` subagent with the diff to review your changes.
@@ -301,12 +297,19 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp validate_merge_semantics(settings) do
     merge = settings.merge
 
     cond do
       merge.mode == "auto" and merge.require_human_approval == true and merge.approval_states == [] ->
         {:error, {:invalid_workflow_config, "merge.approval_states must be set when merge.require_human_approval is true"}}
+
+      merge.strategy == "queue" and merge.method == "rebase" ->
+        {:error, {:invalid_workflow_config, "merge.method must be squash or merge when merge.strategy is queue"}}
+
+      not is_integer(merge.max_rebase_attempts) or merge.max_rebase_attempts <= 0 ->
+        {:error, {:invalid_workflow_config, "merge.max_rebase_attempts must be greater than 0"}}
 
       merge.mode == "auto" and rollout_disallows_merge?(settings.rollout.mode) ->
         :ok

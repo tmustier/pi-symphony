@@ -82,8 +82,10 @@ review:
     - P2
 merge:
   mode: disabled
-  executor: land_skill
+  executor: gh
   method: squash
+  strategy: queue
+  max_rebase_attempts: 2
   require_green_checks: true
   require_head_match: true
   require_human_approval: true

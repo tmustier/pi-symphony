@@ -131,8 +131,6 @@ defmodule SymphonyElixir.PromptBuilder do
     end
   end
 
-
-
   defp default_prompt(prompt) when is_binary(prompt) do
     if String.trim(prompt) == "" do
       Config.workflow_prompt()
