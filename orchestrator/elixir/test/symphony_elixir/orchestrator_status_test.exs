@@ -1643,7 +1643,21 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       )
 
     state = %Orchestrator.State{
-      running: %{"issue-running" => %{}}
+      running: %{"issue-running" => %{}},
+      tracked: %{
+        "issue-unqueued" => %{
+          issue_id: "issue-unqueued",
+          issue_identifier: "MT-UNQUEUED",
+          workpad: %{
+            metadata: %{
+              "pr" => %{
+                "number" => 203,
+                "url" => "https://github.com/acme/widgets/pull/203"
+              }
+            }
+          }
+        }
+      }
     }
 
     assert Orchestrator.build_rebase_targets_for_test(queue, state) == [
@@ -1659,7 +1673,78 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            ]
   end
 
+  test "complete_merge_task requeues the current entry when merge does not complete" do
+    state = %Orchestrator.State{
+      merge_queue:
+        %{}
+        |> MergeQueue.add("issue-later", %{number: 302, url: "https://github.com/acme/widgets/pull/302", repo_slug: "acme/widgets"}, 2,
+          issue_identifier: "MT-LATER",
+          enqueued_at_ms: 200
+        ),
+      merge_in_progress: "issue-current",
+      merge_current_entry: %{
+        issue_id: "issue-current",
+        issue_identifier: "MT-CURRENT",
+        priority: 1,
+        pr_context: %{number: 301, url: "https://github.com/acme/widgets/pull/301", repo_slug: "acme/widgets"},
+        enqueued_at_ms: 100
+      },
+      merge_task_ref: make_ref()
+    }
+
+    next_state =
+      Orchestrator.complete_merge_task_for_test(state, "issue-current", %{
+        updated_issue: :missing,
+        merge_completed?: false,
+        rebased_issues: []
+      })
+
+    assert next_state.merge_in_progress == nil
+    assert next_state.merge_current_entry == nil
+    assert next_state.merge_task_ref == nil
+
+    assert Enum.map(MergeQueue.ordered_entries(next_state.merge_queue), &{&1.issue_id, &1.enqueued_at_ms}) == [
+             {"issue-current", 100},
+             {"issue-later", 200}
+           ]
+  end
+
+  test "handle_merge_task_down requeues the current entry after a crash" do
+    state = %Orchestrator.State{
+      merge_queue:
+        %{}
+        |> MergeQueue.add("issue-later", %{number: 402, url: "https://github.com/acme/widgets/pull/402", repo_slug: "acme/widgets"}, 2,
+          issue_identifier: "MT-LATER",
+          enqueued_at_ms: 200
+        ),
+      merge_in_progress: "issue-current",
+      merge_current_entry: %{
+        issue_id: "issue-current",
+        issue_identifier: "MT-CURRENT",
+        priority: 1,
+        pr_context: %{number: 401, url: "https://github.com/acme/widgets/pull/401", repo_slug: "acme/widgets"},
+        enqueued_at_ms: 100
+      },
+      merge_task_ref: make_ref()
+    }
+
+    next_state = Orchestrator.handle_merge_task_down_for_test(state, :boom)
+
+    assert next_state.merge_in_progress == nil
+    assert next_state.merge_current_entry == nil
+    assert next_state.merge_task_ref == nil
+
+    assert Enum.map(MergeQueue.ordered_entries(next_state.merge_queue), &{&1.issue_id, &1.enqueued_at_ms}) == [
+             {"issue-current", 100},
+             {"issue-later", 200}
+           ]
+  end
+
   test "application stop renders offline status" do
+    on_exit(fn ->
+      assert {:ok, _apps} = Application.ensure_all_started(:symphony_elixir)
+    end)
+
     rendered =
       ExUnit.CaptureIO.capture_io(fn ->
         assert :ok = SymphonyElixir.Application.stop(:normal)

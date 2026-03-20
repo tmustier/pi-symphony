@@ -53,6 +53,7 @@ defmodule SymphonyElixir.Orchestrator do
       worker_rate_limits: nil,
       merge_queue: %{},
       merge_in_progress: nil,
+      merge_current_entry: nil,
       merge_task_ref: nil
     ]
   end
@@ -428,7 +429,13 @@ defmodule SymphonyElixir.Orchestrator do
             "Queued merge task started for issue_id=#{issue_id} issue_identifier=#{entry.issue_identifier || issue_id}"
           )
 
-          %{state | merge_queue: next_queue, merge_in_progress: issue_id, merge_task_ref: task.ref}
+          %{
+            state
+            | merge_queue: next_queue,
+              merge_in_progress: issue_id,
+              merge_current_entry: entry,
+              merge_task_ref: task.ref
+          }
 
         :empty ->
           state
@@ -482,15 +489,16 @@ defmodule SymphonyElixir.Orchestrator do
 
     case merge_result do
       {:ok, %Issue{} = issue} ->
-        if merge_successful_issue?(issue) do
-          rebased_issues = auto_rebase_targets(rebase_targets)
-          %{updated_issue: issue, rebased_issues: rebased_issues}
-        else
-          %{updated_issue: issue, rebased_issues: []}
-        end
+        merge_completed? = merge_successful_issue?(issue)
+
+        %{
+          updated_issue: issue,
+          merge_completed?: merge_completed?,
+          rebased_issues: if(merge_completed?, do: auto_rebase_targets(rebase_targets), else: [])
+        }
 
       {:ok, :missing} ->
-        %{updated_issue: :missing, rebased_issues: []}
+        %{updated_issue: :missing, merge_completed?: false, rebased_issues: []}
 
       {:error, reason} ->
         %{error: reason, rebased_issues: []}
@@ -543,20 +551,22 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp refresh_issue_after_rebase(_issue_id), do: nil
 
-  defp complete_merge_task(%State{} = state, _issue_id, %{updated_issue: updated_issue, rebased_issues: rebased_issues}) do
-    state = %{state | merge_in_progress: nil, merge_task_ref: nil}
+  defp complete_merge_task(%State{} = state, _issue_id, %{updated_issue: updated_issue, rebased_issues: rebased_issues} = result) do
     state = maybe_update_merge_task_issue(state, updated_issue)
     state = Enum.reduce(rebased_issues, state, &maybe_update_rebased_issue(&2, &1))
-    maybe_start_merge_task(state)
+
+    if Map.get(result, :merge_completed?) do
+      state
+      |> clear_merge_task_state()
+      |> maybe_start_merge_task()
+    else
+      requeue_current_merge_entry(state)
+    end
   end
 
   defp complete_merge_task(%State{} = state, issue_id, %{error: reason}) do
     Logger.warning("Merge task failed for issue_id=#{issue_id}: #{inspect(reason)}")
-
-    state
-    |> Map.put(:merge_in_progress, nil)
-    |> Map.put(:merge_task_ref, nil)
-    |> maybe_start_merge_task()
+    requeue_current_merge_entry(state)
   end
 
   defp maybe_update_merge_task_issue(state, %Issue{} = issue), do: update_tracked_issue(state, issue)
@@ -565,16 +575,29 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_update_rebased_issue(state, %{refreshed_issue: %Issue{} = issue}), do: update_tracked_issue(state, issue)
   defp maybe_update_rebased_issue(state, _entry), do: state
 
-  defp handle_merge_task_down(%State{} = state, :normal), do: %{state | merge_in_progress: nil, merge_task_ref: nil}
+  defp clear_merge_task_state(%State{} = state) do
+    %{state | merge_in_progress: nil, merge_current_entry: nil, merge_task_ref: nil}
+  end
+
+  defp requeue_current_merge_entry(%State{merge_current_entry: %{issue_id: issue_id} = entry} = state)
+       when is_binary(issue_id) do
+    queue =
+      MergeQueue.add(state.merge_queue, issue_id, entry.pr_context, entry.priority,
+        issue_identifier: entry.issue_identifier,
+        enqueued_at_ms: entry.enqueued_at_ms
+      )
+
+    %{state | merge_queue: queue, merge_in_progress: nil, merge_current_entry: nil, merge_task_ref: nil}
+  end
+
+  defp requeue_current_merge_entry(%State{} = state), do: clear_merge_task_state(state)
+
+  defp handle_merge_task_down(%State{} = state, :normal), do: clear_merge_task_state(state)
 
   defp handle_merge_task_down(%State{} = state, reason) do
     issue_id = state.merge_in_progress || "unknown"
     Logger.warning("Merge task crashed for issue_id=#{issue_id}: #{inspect(reason)}")
-
-    state
-    |> Map.put(:merge_in_progress, nil)
-    |> Map.put(:merge_task_ref, nil)
-    |> maybe_start_merge_task()
+    requeue_current_merge_entry(state)
   end
 
   defp reconcile_candidate_issue_lifecycles(issues, %State{} = state) when is_list(issues) do
@@ -712,6 +735,17 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   def build_rebase_targets_for_test(_merge_queue, _state), do: []
+
+  @doc false
+  @spec complete_merge_task_for_test(term(), String.t(), map()) :: term()
+  def complete_merge_task_for_test(%State{} = state, issue_id, result)
+      when is_binary(issue_id) and is_map(result) do
+    complete_merge_task(state, issue_id, result)
+  end
+
+  @doc false
+  @spec handle_merge_task_down_for_test(term(), term()) :: term()
+  def handle_merge_task_down_for_test(%State{} = state, reason), do: handle_merge_task_down(state, reason)
 
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
 
@@ -1376,7 +1410,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp merge_in_progress_identifier(%State{} = state) do
     case Map.get(state.tracked, state.merge_in_progress) do
       %{issue_identifier: identifier} -> identifier
-      _ -> nil
+      _ -> get_in(state, [:merge_current_entry, :issue_identifier])
     end
   end
 
