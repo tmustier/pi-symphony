@@ -425,9 +425,7 @@ defmodule SymphonyElixir.Orchestrator do
               process_merge_task(issue_id, rebase_targets)
             end)
 
-          Logger.info(
-            "Queued merge task started for issue_id=#{issue_id} issue_identifier=#{entry.issue_identifier || issue_id}"
-          )
+          Logger.info("Queued merge task started for issue_id=#{issue_id} issue_identifier=#{entry.issue_identifier || issue_id}")
 
           %{
             state
