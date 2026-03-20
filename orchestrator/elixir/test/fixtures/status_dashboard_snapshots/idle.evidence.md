@@ -18,5 +18,9 @@
 ├─ Backoff queue
 │
 │  No queued retries
+│
+├─ Merge queue
+│
+│  No queued merges
 ╰─
 ```

@@ -316,6 +316,7 @@ defmodule SymphonyElixir.StatusDashboard do
              running: running,
              retrying: retrying,
              worker_totals: worker_totals,
+             merge: Map.get(snapshot, :merge),
              rate_limits: Map.get(snapshot, :rate_limits),
              polling: Map.get(snapshot, :polling)
            }},
@@ -347,8 +348,10 @@ defmodule SymphonyElixir.StatusDashboard do
         running_rows = format_running_rows(running, running_event_width)
         running_to_backoff_spacer = if(running == [], do: [], else: ["│"])
         backoff_rows = format_retry_rows(retrying)
+        merge_rows = format_merge_rows(Map.get(snapshot, :merge, %{}))
         tracked_rows = format_tracked_rows(running, retrying, tracked, terminal_columns_override)
-        backoff_to_tracked_spacer = if(tracked_rows == [], do: [], else: ["│"])
+        backoff_to_merge_spacer = ["│"]
+        merge_to_tracked_spacer = if(tracked_rows == [], do: [], else: ["│"])
 
         ([
            colorize("╭─ SYMPHONY STATUS", @ansi_bold),
@@ -379,7 +382,9 @@ defmodule SymphonyElixir.StatusDashboard do
            running_to_backoff_spacer ++
            [colorize("├─ Backoff queue", @ansi_bold), "│"] ++
            backoff_rows ++
-           backoff_to_tracked_spacer ++
+           backoff_to_merge_spacer ++
+           merge_rows ++
+           merge_to_tracked_spacer ++
            tracked_rows ++
            [closing_border()])
         |> List.flatten()
@@ -614,6 +619,7 @@ defmodule SymphonyElixir.StatusDashboard do
              running: running,
              retrying: retrying,
              tracked: Map.get(snapshot, :tracked, []),
+             merge: Map.get(snapshot, :merge),
              worker_totals: worker_totals,
              rate_limits: Map.get(snapshot, :rate_limits),
              polling: Map.get(snapshot, :polling)
@@ -734,6 +740,35 @@ defmodule SymphonyElixir.StatusDashboard do
       |> String.split(", ")
     end
   end
+
+  defp format_merge_rows(%{in_progress_issue_identifier: in_progress, queued: queued}) do
+    rows =
+      []
+      |> maybe_append_merge_in_progress(in_progress)
+      |> Kernel.++(format_merge_queue_entries(queued))
+
+    [colorize("├─ Merge queue", @ansi_bold), "│" | if(rows == [], do: ["│  " <> colorize("No queued merges", @ansi_gray)], else: rows)]
+  end
+
+  defp format_merge_rows(_merge), do: [colorize("├─ Merge queue", @ansi_bold), "│", "│  " <> colorize("No queued merges", @ansi_gray)]
+
+  defp maybe_append_merge_in_progress(rows, issue_identifier) when is_binary(issue_identifier) and issue_identifier != "" do
+    rows ++ ["│  " <> colorize("⇅", @ansi_green) <> " " <> colorize("merging #{issue_identifier}", @ansi_green)]
+  end
+
+  defp maybe_append_merge_in_progress(rows, _issue_identifier), do: rows
+
+  defp format_merge_queue_entries(queued) when is_list(queued) do
+    Enum.map(queued, fn entry ->
+      identifier = Map.get(entry, :issue_identifier) || Map.get(entry, :issue_id) || "unknown"
+      priority = Map.get(entry, :priority) || 5
+      pr_number = Map.get(entry, :pr_number)
+      pr_label = if is_integer(pr_number), do: "pr=##{pr_number}", else: "pr=n/a"
+      "│  " <> colorize("↳", @ansi_cyan) <> " " <> colorize("P#{priority} #{identifier} #{pr_label}", @ansi_cyan)
+    end)
+  end
+
+  defp format_merge_queue_entries(_queued), do: []
 
   defp format_tracked_rows(running, retrying, tracked, terminal_columns_override) do
     active_rows =

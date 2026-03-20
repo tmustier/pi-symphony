@@ -9,8 +9,10 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.{
     AgentRunner,
     Config,
+    MergeQueue,
     OrchestrationLifecycle,
     OrchestrationPolicy,
+    PullRequests,
     StatusDashboard,
     Tracker,
     Workspace
@@ -48,7 +50,10 @@ defmodule SymphonyElixir.Orchestrator do
       claimed: MapSet.new(),
       retry_attempts: %{},
       worker_totals: nil,
-      worker_rate_limits: nil
+      worker_rate_limits: nil,
+      merge_queue: %{},
+      merge_in_progress: nil,
+      merge_task_ref: nil
     ]
   end
 
@@ -124,6 +129,20 @@ defmodule SymphonyElixir.Orchestrator do
     state = schedule_tick(state, state.poll_interval_ms)
     state = %{state | poll_check_in_progress: false}
 
+    notify_dashboard()
+    {:noreply, state}
+  end
+
+  def handle_info({merge_ref, result}, %{merge_task_ref: merge_ref, merge_in_progress: issue_id} = state)
+      when is_reference(merge_ref) do
+    Process.demonitor(merge_ref, [:flush])
+    state = complete_merge_task(state, issue_id, result)
+    notify_dashboard()
+    {:noreply, state}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{merge_task_ref: ref} = state) do
+    state = handle_merge_task_down(state, reason)
     notify_dashboard()
     {:noreply, state}
   end
@@ -251,6 +270,8 @@ defmodule SymphonyElixir.Orchestrator do
          {:ok, issues} <- Tracker.fetch_candidate_issues() do
       issues = reconcile_candidate_issue_lifecycles(issues, state)
       state = update_tracked_issues(state, issues)
+      state = sync_merge_queue(state, issues)
+      state = maybe_start_merge_task(state)
 
       if Dispatch.available_slots(state) > 0 do
         choose_issues(issues, state)
@@ -296,6 +317,257 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
         state
     end
+  end
+
+  defp merge_queue_enabled? do
+    settings = Config.settings!()
+    settings.merge.mode == "auto" and settings.merge.strategy == "queue"
+  end
+
+  defp sync_merge_queue(%State{} = state, issues) when is_list(issues) do
+    if merge_queue_enabled?() do
+      candidate_entries =
+        Enum.flat_map(issues, fn
+          %Issue{id: issue_id} when issue_id == state.merge_in_progress ->
+            []
+
+          %Issue{} = issue ->
+            case merge_queue_entry(issue, state.tracked) do
+              {:ok, entry} -> [{issue.id, entry}]
+              _ -> []
+            end
+
+          _ ->
+            []
+        end)
+
+      candidate_ids = candidate_entries |> Enum.map(&elem(&1, 0)) |> MapSet.new()
+
+      queue =
+        state.merge_queue
+        |> Enum.reduce(%{}, fn {issue_id, entry}, acc ->
+          if MapSet.member?(candidate_ids, issue_id) do
+            Map.put(acc, issue_id, entry)
+          else
+            acc
+          end
+        end)
+
+      queue =
+        Enum.reduce(candidate_entries, queue, fn {issue_id, entry}, acc ->
+          MergeQueue.add(acc, issue_id, entry.pr_context, entry.priority,
+            issue_identifier: entry.issue_identifier,
+            enqueued_at_ms: Map.get(Map.get(state.merge_queue, issue_id, %{}), :enqueued_at_ms)
+          )
+        end)
+
+      %{state | merge_queue: queue}
+    else
+      %{state | merge_queue: %{}}
+    end
+  end
+
+  defp sync_merge_queue(%State{} = state, _issues), do: state
+
+  defp merge_queue_entry(%Issue{id: issue_id} = issue, tracked)
+       when is_binary(issue_id) and is_map(tracked) do
+    with %{} = tracked_entry <- Map.get(tracked, issue_id),
+         phase when phase in ["ready_to_merge", "merging"] <- Map.get(tracked_entry, :phase),
+         %{} = pr_context <- tracked_pr_context(tracked_entry) do
+      {:ok,
+       %{
+         issue_identifier: issue.identifier,
+         priority: Dispatch.priority_rank(issue.priority),
+         pr_context: pr_context
+       }}
+    else
+      _ -> :skip
+    end
+  end
+
+  defp merge_queue_entry(_issue, _tracked), do: :skip
+
+  defp tracked_pr_context(tracked_entry) when is_map(tracked_entry) do
+    pr_metadata = get_in(tracked_entry, [:workpad, :metadata, "pr"]) || %{}
+    pr_number = Map.get(pr_metadata, "number")
+    pr_url = Map.get(pr_metadata, "url")
+    head_sha = Map.get(pr_metadata, "head_sha")
+
+    if is_integer(pr_number) or is_binary(pr_url) do
+      %{
+        number: pr_number,
+        url: pr_url,
+        repo_slug: Config.settings!().pr.repo_slug,
+        expected_head_sha: head_sha
+      }
+    end
+  end
+
+  defp tracked_pr_context(_tracked_entry), do: nil
+
+  defp maybe_start_merge_task(%State{merge_in_progress: issue_id} = state) when is_binary(issue_id),
+    do: state
+
+  defp maybe_start_merge_task(%State{merge_task_ref: merge_task_ref} = state)
+       when is_reference(merge_task_ref),
+       do: state
+
+  defp maybe_start_merge_task(%State{} = state) do
+    if merge_queue_enabled?() do
+      case MergeQueue.take_next(state.merge_queue) do
+        {%{issue_id: issue_id} = entry, next_queue} ->
+          rebase_targets = build_rebase_targets(state, issue_id)
+
+          task =
+            Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+              process_merge_task(issue_id, rebase_targets)
+            end)
+
+          Logger.info(
+            "Queued merge task started for issue_id=#{issue_id} issue_identifier=#{entry.issue_identifier || issue_id}"
+          )
+
+          %{state | merge_queue: next_queue, merge_in_progress: issue_id, merge_task_ref: task.ref}
+
+        :empty ->
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp build_rebase_targets(%State{} = state, current_issue_id) when is_binary(current_issue_id) do
+    running_ids = Map.keys(state.running) |> MapSet.new()
+
+    state.tracked
+    |> Map.values()
+    |> Enum.reject(fn entry ->
+      Map.get(entry, :issue_id) == current_issue_id or
+        MapSet.member?(running_ids, Map.get(entry, :issue_id)) or
+        not tracked_pr_open?(entry)
+    end)
+    |> Enum.flat_map(fn entry ->
+      case tracked_pr_context(entry) do
+        %{} = pr_context ->
+          [
+            %{
+              issue_id: Map.get(entry, :issue_id),
+              issue_identifier: Map.get(entry, :issue_identifier),
+              pr_context: pr_context
+            }
+          ]
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp tracked_pr_open?(entry) when is_map(entry) do
+    get_in(entry, [:workpad, :observation, "gates", "pr"]) not in ["merged", "closed"]
+  end
+
+  defp tracked_pr_open?(_entry), do: false
+
+  defp process_merge_task(issue_id, rebase_targets) when is_binary(issue_id) and is_list(rebase_targets) do
+    merge_result = OrchestrationLifecycle.reconcile_after_run(issue_id, %{}, queue_merge: true)
+
+    case merge_result do
+      {:ok, %Issue{} = issue} ->
+        if merge_successful_issue?(issue) do
+          rebased_issues = auto_rebase_targets(rebase_targets)
+          %{updated_issue: issue, rebased_issues: rebased_issues}
+        else
+          %{updated_issue: issue, rebased_issues: []}
+        end
+
+      {:ok, :missing} ->
+        %{updated_issue: :missing, rebased_issues: []}
+
+      {:error, reason} ->
+        %{error: reason, rebased_issues: []}
+    end
+  end
+
+  defp merge_successful_issue?(%Issue{} = issue) do
+    runtime = OrchestrationPolicy.issue_runtime(issue, Config.settings!())
+
+    runtime
+    |> get_in([:workpad, :metadata, "merge", "last_merged_head_sha"])
+    |> is_binary()
+  end
+
+  defp merge_successful_issue?(_issue), do: false
+
+  defp auto_rebase_targets(targets) when is_list(targets) do
+    max_attempts = Config.settings!().merge.max_rebase_attempts
+
+    Enum.map(targets, fn target ->
+      result = rebase_target(target, max_attempts)
+      refreshed_issue = refresh_issue_after_rebase(target.issue_id)
+      %{target: target, result: result, refreshed_issue: refreshed_issue}
+    end)
+  end
+
+  defp rebase_target(%{pr_context: pr_context}, attempts_left)
+       when is_map(pr_context) and is_integer(attempts_left) and attempts_left > 0 do
+    case PullRequests.rebase_pr(pr_context) do
+      {:error, _reason} when attempts_left > 1 ->
+        Process.sleep(1_000)
+        rebase_target(%{pr_context: pr_context}, attempts_left - 1)
+
+      result ->
+        Process.sleep(1_000)
+        result
+    end
+  end
+
+  defp rebase_target(_target, _attempts_left), do: {:skip, %{reason: :missing_pr_number}}
+
+  defp refresh_issue_after_rebase(issue_id) when is_binary(issue_id) do
+    with {:ok, [%Issue{} = issue | _]} <- Tracker.fetch_issue_states_by_ids([issue_id]),
+         {:ok, %Issue{} = updated_issue} <- OrchestrationLifecycle.bootstrap_issue(issue) do
+      updated_issue
+    else
+      _ -> nil
+    end
+  end
+
+  defp refresh_issue_after_rebase(_issue_id), do: nil
+
+  defp complete_merge_task(%State{} = state, _issue_id, %{updated_issue: updated_issue, rebased_issues: rebased_issues}) do
+    state = %{state | merge_in_progress: nil, merge_task_ref: nil}
+    state = maybe_update_merge_task_issue(state, updated_issue)
+    state = Enum.reduce(rebased_issues, state, &maybe_update_rebased_issue(&2, &1))
+    maybe_start_merge_task(state)
+  end
+
+  defp complete_merge_task(%State{} = state, issue_id, %{error: reason}) do
+    Logger.warning("Merge task failed for issue_id=#{issue_id}: #{inspect(reason)}")
+
+    state
+    |> Map.put(:merge_in_progress, nil)
+    |> Map.put(:merge_task_ref, nil)
+    |> maybe_start_merge_task()
+  end
+
+  defp maybe_update_merge_task_issue(state, %Issue{} = issue), do: update_tracked_issue(state, issue)
+  defp maybe_update_merge_task_issue(state, _issue), do: state
+
+  defp maybe_update_rebased_issue(state, %{refreshed_issue: %Issue{} = issue}), do: update_tracked_issue(state, issue)
+  defp maybe_update_rebased_issue(state, _entry), do: state
+
+  defp handle_merge_task_down(%State{} = state, :normal), do: %{state | merge_in_progress: nil, merge_task_ref: nil}
+
+  defp handle_merge_task_down(%State{} = state, reason) do
+    issue_id = state.merge_in_progress || "unknown"
+    Logger.warning("Merge task crashed for issue_id=#{issue_id}: #{inspect(reason)}")
+
+    state
+    |> Map.put(:merge_in_progress, nil)
+    |> Map.put(:merge_task_ref, nil)
+    |> maybe_start_merge_task()
   end
 
   defp reconcile_candidate_issue_lifecycles(issues, %State{} = state) when is_list(issues) do
@@ -1024,11 +1296,14 @@ defmodule SymphonyElixir.Orchestrator do
       |> Map.values()
       |> Enum.sort_by(&{&1.issue_identifier || "", &1.issue_id || ""})
 
+    merge = merge_snapshot(state)
+
     {:reply,
      %{
        running: running,
        retrying: retrying,
        tracked: tracked,
+       merge: merge,
        worker_totals: state.worker_totals,
        rate_limits: Map.get(state, :worker_rate_limits),
        polling: %{
@@ -1052,6 +1327,36 @@ defmodule SymphonyElixir.Orchestrator do
        requested_at: DateTime.utc_now(),
        operations: ["poll", "reconcile"]
      }, state}
+  end
+
+  defp merge_snapshot(%State{} = state) do
+    queued =
+      state.merge_queue
+      |> MergeQueue.ordered_entries()
+      |> Enum.map(fn entry ->
+        %{
+          issue_id: entry.issue_id,
+          issue_identifier: entry.issue_identifier,
+          pr_number: get_in(entry, [:pr_context, :number]),
+          priority: entry.priority,
+          enqueued_at_ms: entry.enqueued_at_ms
+        }
+      end)
+
+    %{
+      in_progress_issue_id: state.merge_in_progress,
+      in_progress_issue_identifier: merge_in_progress_identifier(state),
+      queued: queued
+    }
+  end
+
+  defp merge_in_progress_identifier(%State{merge_in_progress: nil}), do: nil
+
+  defp merge_in_progress_identifier(%State{} = state) do
+    case Map.get(state.tracked, state.merge_in_progress) do
+      %{issue_identifier: identifier} -> identifier
+      _ -> nil
+    end
   end
 
   defp schedule_tick(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do

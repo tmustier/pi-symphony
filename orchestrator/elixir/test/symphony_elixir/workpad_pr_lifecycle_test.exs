@@ -286,6 +286,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       rollout_mode: "merge",
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_require_green_checks: true,
       merge_require_head_match: true
     )
@@ -355,6 +356,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       rollout_mode: "merge",
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_require_green_checks: true,
       merge_require_head_match: true
     )
@@ -407,6 +409,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       rollout_mode: "merge",
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_require_green_checks: true,
       merge_require_head_match: true
     )
@@ -885,11 +888,11 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
 
       assert runtime.phase == "ready_to_merge"
       assert runtime.waiting_reason == nil
-      assert runtime.next_intended_action == "dispatch_worker"
+      assert runtime.next_intended_action == "merge_when_green"
       assert runtime.workpad.metadata["observation"]["next_intended_action"] == "merge_when_green"
       assert runtime.workpad.metadata["waiting"]["reason"] == nil
       assert runtime.passive_phase == false
-      assert SymphonyElixir.OrchestrationPolicy.continuation_allowed?(updated_issue, Config.settings!()) == true
+      assert SymphonyElixir.OrchestrationPolicy.continuation_allowed?(updated_issue, Config.settings!()) == false
       assert gates["human_approval"] == "approved"
       assert gates["checks"] == "pass"
       assert gates["review"] == "current"
@@ -1919,6 +1922,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_output_format: "structured_markdown_v1",
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 
@@ -2073,6 +2077,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_enabled: false,
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_completion_state: "Resolved",
       merge_approval_states: ["Merging"]
     )
@@ -2198,6 +2203,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_output_format: "structured_markdown_v1",
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 
@@ -2307,6 +2313,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_enabled: false,
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 
@@ -2421,6 +2428,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_enabled: false,
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 
@@ -2533,6 +2541,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_enabled: false,
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 
@@ -2617,6 +2626,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_enabled: false,
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 
@@ -2717,6 +2727,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_output_format: "structured_markdown_v1",
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 
@@ -2832,6 +2843,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_output_format: "structured_markdown_v1",
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 
@@ -2972,6 +2984,7 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
       review_output_format: "structured_markdown_v1",
       merge_mode: "auto",
       merge_method: "squash",
+      merge_strategy: "immediate",
       merge_approval_states: ["Merging"]
     )
 

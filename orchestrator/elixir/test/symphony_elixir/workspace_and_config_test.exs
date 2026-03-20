@@ -1558,6 +1558,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.review.max_passes == 1
     assert config.merge.mode == "disabled"
     assert config.merge.method == "squash"
+    assert config.merge.strategy == "immediate"
+    assert config.merge.max_rebase_attempts == 2
 
     write_workflow_file!(Workflow.workflow_file_path(),
       worker_runtime: "pi",
@@ -1620,6 +1622,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert settings.review.agent == "pr-reviewer"
     assert settings.review.output_format == "structured_markdown_v1"
     assert settings.merge.executor == "land_skill"
+    assert settings.merge.strategy == "queue"
+    assert settings.merge.max_rebase_attempts == 2
     assert settings.merge.approval_states == ["Merging"]
   end
 
@@ -1667,6 +1671,17 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     File.write!(Workflow.workflow_file_path(), workflow)
     assert {:error, {:invalid_workflow_config, message}} = Config.settings()
     assert message =~ "orchestration has unknown keys"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      merge_mode: "auto",
+      merge_method: "rebase",
+      merge_approval_states: ["Merging"]
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "merge.method"
+    assert message =~ "merge.strategy"
   end
 
   test "config rejects remote ssh hosts when the Pi runtime is selected" do

@@ -107,13 +107,15 @@ Self-review configuration.
 
 ## merge
 
-Merge automation. Start with `mode: disabled` and graduate to `squash` when confident.
+Merge automation. Start with `mode: disabled`, then switch to `mode: auto` when you want symphony to merge on your behalf.
 
 | Field | Default | Description |
 |---|---|---|
-| `mode` | `disabled` | Merge mode: `disabled`, `squash`, `merge`, `rebase`. |
-| `executor` | `land_skill` | Merge execution strategy. |
-| `method` | `squash` | Git merge method. |
+| `mode` | `disabled` | Merge mode: `disabled` or `auto`. |
+| `executor` | `gh` | Merge execution strategy / executor. |
+| `method` | `squash` | Git merge method. With `strategy: queue`, use `squash` or `merge` — not `rebase`. |
+| `strategy` | `queue` when `mode: auto`, otherwise `immediate` | Merge orchestration strategy. `queue` serializes merges in the orchestrator and auto-rebases remaining PRs; `immediate` preserves legacy immediate merge behavior. |
+| `max_rebase_attempts` | `2` | How many times auto-rebase should retry transient API failures before giving up. |
 | `require_green_checks` | `true` | Block merge until CI passes. |
 | `require_head_match` | `true` | Block merge if HEAD changed since review. |
 | `require_human_approval` | `true` | Require human to move issue to approval state before merge. |

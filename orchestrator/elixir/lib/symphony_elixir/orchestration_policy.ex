@@ -24,6 +24,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   @pr_closed_policies ["new_branch", "reopen", "stop"]
   @merge_modes ["disabled", "auto"]
   @merge_methods ["merge", "squash", "rebase"]
+  @merge_strategies ["immediate", "queue"]
   @waiting_reason_values [
     "checks_pending",
     "human_approval_required",
@@ -77,6 +78,9 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   @spec merge_methods() :: [String.t()]
   def merge_methods, do: @merge_methods
 
+  @spec merge_strategies() :: [String.t()]
+  def merge_strategies, do: @merge_strategies
+
   @spec waiting_reason_values() :: [String.t()]
   def waiting_reason_values, do: @waiting_reason_values
 
@@ -90,11 +94,12 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     ownership = ownership_state(issue, settings, workpad)
     kill_switch = kill_switch_state(issue, settings)
     passive_phase = workpad.phase in settings.orchestration.passive_phases
+    merge_managed_phase = merge_managed_phase?(workpad.phase, settings)
     rework_limit_active = rework_limit_active?(workpad, settings)
     blocking_reason = policy_blocking_reason(ownership, kill_switch, rework_limit_active)
     observe_only = settings.rollout.mode == "observe"
     base_dispatch_allowed = is_nil(blocking_reason)
-    dispatch_allowed = base_dispatch_allowed and not passive_phase and not observe_only
+    dispatch_allowed = base_dispatch_allowed and not passive_phase and not observe_only and not merge_managed_phase
 
     %{
       phase: workpad.phase,
@@ -110,6 +115,7 @@ defmodule SymphonyElixir.OrchestrationPolicy do
           workpad.observation,
           workpad.phase,
           passive_phase,
+          merge_managed_phase,
           base_dispatch_allowed,
           dispatch_allowed,
           settings.rollout.mode,
@@ -128,6 +134,13 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   end
 
   defp merge_completion_phase?(phase), do: phase == "merging"
+
+  defp merge_managed_phase?("merging", _settings), do: true
+
+  defp merge_managed_phase?("ready_to_merge", %{merge: %{mode: "auto", strategy: "queue"}}),
+    do: true
+
+  defp merge_managed_phase?(_phase, _settings), do: false
 
   @spec tracked_issue(Issue.t(), map()) :: map()
   def tracked_issue(%Issue{} = issue, settings) when is_map(settings) do
@@ -405,31 +418,34 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     end
   end
 
-  defp preferred_next_intended_action(observation, phase, passive_phase, base_dispatch_allowed, dispatch_allowed, rollout_mode, blocking_reason) do
+  defp preferred_next_intended_action(observation, phase, passive_phase, merge_managed_phase, base_dispatch_allowed, dispatch_allowed, rollout_mode, blocking_reason) do
     computed =
       next_intended_action(
         passive_phase,
+        merge_managed_phase,
         base_dispatch_allowed,
         dispatch_allowed,
         rollout_mode,
         blocking_reason
       )
 
-    if base_dispatch_allowed and (passive_phase or phase == "merging") do
+    if base_dispatch_allowed and (passive_phase or merge_managed_phase or phase == "merging") do
       fetch_value(observation, :next_intended_action) || computed
     else
       computed
     end
   end
 
-  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, :ownership), do: "await_ownership"
-  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, :kill_switch), do: "automation_paused"
-  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, :rework_limit), do: "operator_intervention_required"
-  defp next_intended_action(_passive_phase, false, _dispatch_allowed, _rollout_mode, _blocking_reason), do: "idle"
+  defp next_intended_action(_passive_phase, _merge_managed_phase, false, _dispatch_allowed, _rollout_mode, :ownership), do: "await_ownership"
+  defp next_intended_action(_passive_phase, _merge_managed_phase, false, _dispatch_allowed, _rollout_mode, :kill_switch), do: "automation_paused"
+  defp next_intended_action(_passive_phase, _merge_managed_phase, false, _dispatch_allowed, _rollout_mode, :rework_limit), do: "operator_intervention_required"
+  defp next_intended_action(_passive_phase, _merge_managed_phase, false, _dispatch_allowed, _rollout_mode, _blocking_reason), do: "idle"
 
-  defp next_intended_action(true, true, false, _rollout_mode, _blocking_reason), do: "poll_on_next_cycle"
-  defp next_intended_action(false, true, true, "observe", _blocking_reason), do: "observe_only"
-  defp next_intended_action(false, true, true, _rollout_mode, _blocking_reason), do: "dispatch_worker"
+  defp next_intended_action(true, _merge_managed_phase, true, false, _rollout_mode, _blocking_reason), do: "poll_on_next_cycle"
+  defp next_intended_action(false, true, true, false, _rollout_mode, _blocking_reason), do: "poll_on_next_cycle"
+  defp next_intended_action(false, false, true, false, "observe", _blocking_reason), do: "observe_only"
+  defp next_intended_action(false, false, true, false, _rollout_mode, _blocking_reason), do: "poll_on_next_cycle"
+  defp next_intended_action(false, false, true, true, _rollout_mode, _blocking_reason), do: "dispatch_worker"
 
   defp default_waiting_reason(_passive_phase, _rollout_mode, :kill_switch), do: "kill_switch_active"
   defp default_waiting_reason(_passive_phase, _rollout_mode, :ownership), do: nil

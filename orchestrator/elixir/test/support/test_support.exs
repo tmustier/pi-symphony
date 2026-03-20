@@ -157,6 +157,8 @@ defmodule SymphonyElixir.TestSupport do
           merge_mode: "disabled",
           merge_executor: nil,
           merge_method: "squash",
+          merge_strategy: nil,
+          merge_max_rebase_attempts: 2,
           merge_require_green_checks: true,
           merge_require_head_match: true,
           merge_require_human_approval: true,
@@ -237,6 +239,8 @@ defmodule SymphonyElixir.TestSupport do
     merge_mode = Keyword.get(config, :merge_mode)
     merge_executor = Keyword.get(config, :merge_executor)
     merge_method = Keyword.get(config, :merge_method)
+    merge_strategy = Keyword.get(config, :merge_strategy)
+    merge_max_rebase_attempts = Keyword.get(config, :merge_max_rebase_attempts)
     merge_require_green_checks = Keyword.get(config, :merge_require_green_checks)
     merge_require_head_match = Keyword.get(config, :merge_require_head_match)
     merge_require_human_approval = Keyword.get(config, :merge_require_human_approval)
@@ -331,6 +335,8 @@ defmodule SymphonyElixir.TestSupport do
           mode: merge_mode,
           executor: merge_executor,
           method: merge_method,
+          strategy: merge_strategy,
+          max_rebase_attempts: merge_max_rebase_attempts,
           require_green_checks: merge_require_green_checks,
           require_head_match: merge_require_head_match,
           require_human_approval: merge_require_human_approval,
@@ -430,6 +436,8 @@ defmodule SymphonyElixir.TestSupport do
       "  mode: #{yaml_value(config.mode)}",
       "  executor: #{yaml_value(config.executor)}",
       "  method: #{yaml_value(config.method)}",
+      "  strategy: #{yaml_value(config.strategy)}",
+      "  max_rebase_attempts: #{yaml_value(config.max_rebase_attempts)}",
       "  require_green_checks: #{yaml_value(config.require_green_checks)}",
       "  require_head_match: #{yaml_value(config.require_head_match)}",
       "  require_human_approval: #{yaml_value(config.require_human_approval)}",

@@ -14,16 +14,20 @@ defmodule SymphonyElixirWeb.Presenter do
       %{} = snapshot ->
         tracked = Map.get(snapshot, :tracked, [])
 
+        merge = Map.get(snapshot, :merge, %{})
+
         %{
           generated_at: generated_at,
           counts: %{
             running: length(snapshot.running),
             retrying: length(snapshot.retrying),
-            tracked: length(tracked)
+            tracked: length(tracked),
+            merge_queued: length(Map.get(merge, :queued, []))
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           tracked: Enum.map(tracked, &tracked_entry_payload/1),
+          merge: merge_payload(merge),
           worker_totals: snapshot.worker_totals,
           rate_limits: snapshot.rate_limits
         }
@@ -342,6 +346,26 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp tracked_observation_metadata(_observation), do: nil
+
+  defp merge_payload(merge) when is_map(merge) do
+    %{
+      in_progress_issue_id: Map.get(merge, :in_progress_issue_id),
+      in_progress_issue_identifier: Map.get(merge, :in_progress_issue_identifier),
+      queued:
+        merge
+        |> Map.get(:queued, [])
+        |> Enum.map(fn entry ->
+          %{
+            issue_id: Map.get(entry, :issue_id),
+            issue_identifier: Map.get(entry, :issue_identifier),
+            pr_number: Map.get(entry, :pr_number),
+            priority: Map.get(entry, :priority)
+          }
+        end)
+    }
+  end
+
+  defp merge_payload(_merge), do: %{in_progress_issue_id: nil, in_progress_issue_identifier: nil, queued: []}
 
   defp maybe_put(payload, _key, nil), do: payload
   defp maybe_put(payload, key, value), do: Map.put(payload, key, value)

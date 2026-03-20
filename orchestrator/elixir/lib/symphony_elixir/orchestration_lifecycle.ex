@@ -547,28 +547,38 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp merge_phase?(phase), do: phase in ["ready_to_merge", "merging"]
 
+  defp queue_merge_strategy?(settings),
+    do: settings.merge.mode == "auto" and settings.merge.strategy == "queue"
+
+  defp queue_merge_requested?(opts), do: Keyword.get(opts, :queue_merge, false) == true
+
   defp maybe_passive_merge(issue, _runtime, "ready_to_merge", passive_pr_updates, opts, settings) do
     pr = Map.get(passive_pr_updates, :pr, %{})
     pr_number = Map.get(pr, :number) || Map.get(pr, "number")
     pr_url = Map.get(pr, :url) || Map.get(pr, "url")
 
-    if pr_number != nil and human_approval_ready?(issue, settings) do
-      context = %{
-        number: pr_number,
-        repo_slug:
-          pick_string([
-            Keyword.get(opts, :repo_slug),
-            Map.get(pr, :repo_slug),
-            settings.pr.repo_slug,
-            repo_slug_from_pr_url(pr_url)
-          ]),
-        url: pr_url,
-        expected_head_sha: Map.get(pr, :head_sha)
-      }
+    cond do
+      queue_merge_strategy?(settings) and not queue_merge_requested?(opts) ->
+        {:skip, %{reason: :merge_not_requested}}
 
-      PullRequests.merge_if_head_matches(context, Keyword.put(opts, :settings, settings))
-    else
-      {:skip, %{reason: :merge_not_requested}}
+      pr_number != nil and human_approval_ready?(issue, settings) ->
+        context = %{
+          number: pr_number,
+          repo_slug:
+            pick_string([
+              Keyword.get(opts, :repo_slug),
+              Map.get(pr, :repo_slug),
+              settings.pr.repo_slug,
+              repo_slug_from_pr_url(pr_url)
+            ]),
+          url: pr_url,
+          expected_head_sha: Map.get(pr, :head_sha)
+        }
+
+        PullRequests.merge_if_head_matches(context, Keyword.put(opts, :settings, settings))
+
+      true ->
+        {:skip, %{reason: :merge_not_requested}}
     end
   end
 
@@ -616,12 +626,17 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp maybe_merge_pull_request(issue, runtime, pr_result, opts, settings) do
-    if merge_phase?(runtime.phase) do
-      with {:ok, context} <- merge_pr_context(runtime, pr_result, opts, settings) do
-        execute_or_reconcile_merge(issue, runtime, context, opts, settings)
-      end
-    else
-      {:skip, %{reason: :merge_not_requested}}
+    cond do
+      not merge_phase?(runtime.phase) ->
+        {:skip, %{reason: :merge_not_requested}}
+
+      queue_merge_strategy?(settings) and not queue_merge_requested?(opts) ->
+        {:skip, %{reason: :merge_not_requested}}
+
+      true ->
+        with {:ok, context} <- merge_pr_context(runtime, pr_result, opts, settings) do
+          execute_or_reconcile_merge(issue, runtime, context, opts, settings)
+        end
     end
   end
 

@@ -19,6 +19,10 @@
 │
 │  No queued retries
 │
+├─ Merge queue
+│
+│  No queued merges
+│
 ├─ Passive queue
 │
 │  ◌ MT-880 In Review | waiting_for_checks | checks_pending | pr=#113@abc123d | review=r1@abc123d | merge=attempted...
