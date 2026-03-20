@@ -153,6 +153,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp lifecycle_updates(issue, runtime, git_state, pr_result, review_result, merge_result, settings, now) do
     branch = pick_string([Map.get(git_state, :branch), issue.branch_name])
     head_sha = pick_string([Map.get(git_state, :head_sha)])
@@ -1232,6 +1233,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     }
   end
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp passive_phase_after_observation(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> "blocked"
@@ -1270,6 +1272,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     end
   end
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp passive_next_action(issue, runtime, pr_state, review_status, settings) do
     cond do
       passive_pr_gate(pr_state) != "open" -> non_open_pr_next_action(pr_state)

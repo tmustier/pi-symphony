@@ -76,27 +76,33 @@ defmodule SymphonyElixir.TestSupport do
   def restore_env(key, value), do: System.put_env(key, value)
 
   def stop_default_http_server do
-    case Process.whereis(SymphonyElixir.Supervisor) do
+    case default_http_server_pid() do
       pid when is_pid(pid) ->
-        case Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn
-               {SymphonyElixir.HttpServer, _child_pid, _type, _modules} -> true
-               _child -> false
-             end) do
-          {SymphonyElixir.HttpServer, child_pid, _type, _modules} when is_pid(child_pid) ->
-            :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.HttpServer)
+        :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.HttpServer)
 
-            if Process.alive?(child_pid) do
-              Process.exit(child_pid, :normal)
-            end
-
-            :ok
-
-          _ ->
-            :ok
+        if Process.alive?(pid) do
+          Process.exit(pid, :normal)
         end
+
+        :ok
 
       _ ->
         :ok
+    end
+  end
+
+  defp default_http_server_pid do
+    case Process.whereis(SymphonyElixir.Supervisor) do
+      pid when is_pid(pid) ->
+        SymphonyElixir.Supervisor
+        |> Supervisor.which_children()
+        |> Enum.find_value(fn
+          {SymphonyElixir.HttpServer, child_pid, _type, _modules} when is_pid(child_pid) -> child_pid
+          _child -> nil
+        end)
+
+      _ ->
+        nil
     end
   end
 

@@ -327,48 +327,60 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp sync_merge_queue(%State{} = state, issues) when is_list(issues) do
     if merge_queue_enabled?() do
-      candidate_entries =
-        Enum.flat_map(issues, fn
-          %Issue{id: issue_id} when issue_id == state.merge_in_progress ->
-            []
-
-          %Issue{} = issue ->
-            case merge_queue_entry(issue, state.tracked) do
-              {:ok, entry} -> [{issue.id, entry}]
-              _ -> []
-            end
-
-          _ ->
-            []
-        end)
-
-      candidate_ids = candidate_entries |> Enum.map(&elem(&1, 0)) |> MapSet.new()
-
-      queue =
-        state.merge_queue
-        |> Enum.reduce(%{}, fn {issue_id, entry}, acc ->
-          if MapSet.member?(candidate_ids, issue_id) do
-            Map.put(acc, issue_id, entry)
-          else
-            acc
-          end
-        end)
-
-      queue =
-        Enum.reduce(candidate_entries, queue, fn {issue_id, entry}, acc ->
-          MergeQueue.add(acc, issue_id, entry.pr_context, entry.priority,
-            issue_identifier: entry.issue_identifier,
-            enqueued_at_ms: Map.get(Map.get(state.merge_queue, issue_id, %{}), :enqueued_at_ms)
-          )
-        end)
-
-      %{state | merge_queue: queue}
+      sync_enabled_merge_queue(state, issues)
     else
       %{state | merge_queue: %{}}
     end
   end
 
   defp sync_merge_queue(%State{} = state, _issues), do: state
+
+  defp sync_enabled_merge_queue(%State{} = state, issues) do
+    candidate_entries = merge_queue_candidates(issues, state)
+    candidate_ids = candidate_entries |> Enum.map(&elem(&1, 0)) |> MapSet.new()
+
+    queue =
+      state.merge_queue
+      |> retain_candidate_queue_entries(candidate_ids)
+      |> merge_candidate_queue_entries(candidate_entries, state.merge_queue)
+
+    %{state | merge_queue: queue}
+  end
+
+  defp merge_queue_candidates(issues, %State{} = state) when is_list(issues) do
+    Enum.flat_map(issues, &merge_queue_candidate(&1, state))
+  end
+
+  defp merge_queue_candidate(%Issue{id: issue_id}, %State{merge_in_progress: issue_id}), do: []
+
+  defp merge_queue_candidate(%Issue{} = issue, %State{tracked: tracked}) do
+    case merge_queue_entry(issue, tracked) do
+      {:ok, entry} -> [{issue.id, entry}]
+      _ -> []
+    end
+  end
+
+  defp merge_queue_candidate(_issue, _state), do: []
+
+  defp retain_candidate_queue_entries(queue, candidate_ids) when is_map(queue) do
+    Enum.reduce(queue, %{}, fn {issue_id, entry}, acc ->
+      if MapSet.member?(candidate_ids, issue_id) do
+        Map.put(acc, issue_id, entry)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp merge_candidate_queue_entries(queue, candidate_entries, existing_queue)
+       when is_map(queue) and is_list(candidate_entries) and is_map(existing_queue) do
+    Enum.reduce(candidate_entries, queue, fn {issue_id, entry}, acc ->
+      MergeQueue.add(acc, issue_id, entry.pr_context, entry.priority,
+        issue_identifier: entry.issue_identifier,
+        enqueued_at_ms: Map.get(Map.get(existing_queue, issue_id, %{}), :enqueued_at_ms)
+      )
+    end)
+  end
 
   defp merge_queue_entry(%Issue{id: issue_id} = issue, tracked)
        when is_binary(issue_id) and is_map(tracked) do
@@ -416,31 +428,39 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp maybe_start_merge_task(%State{} = state) do
     if merge_queue_enabled?() do
-      case MergeQueue.take_next(state.merge_queue) do
-        {%{issue_id: issue_id} = entry, next_queue} ->
-          rebase_targets = build_rebase_targets(next_queue, state)
-
-          task =
-            Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
-              process_merge_task(issue_id, rebase_targets)
-            end)
-
-          Logger.info("Queued merge task started for issue_id=#{issue_id} issue_identifier=#{entry.issue_identifier || issue_id}")
-
-          %{
-            state
-            | merge_queue: next_queue,
-              merge_in_progress: issue_id,
-              merge_current_entry: entry,
-              merge_task_ref: task.ref
-          }
-
-        :empty ->
-          state
-      end
+      start_next_merge_task(state)
     else
       state
     end
+  end
+
+  defp start_next_merge_task(%State{} = state) do
+    case MergeQueue.take_next(state.merge_queue) do
+      {%{issue_id: issue_id} = entry, next_queue} ->
+        launch_merge_task(state, issue_id, entry, next_queue)
+
+      :empty ->
+        state
+    end
+  end
+
+  defp launch_merge_task(%State{} = state, issue_id, entry, next_queue) when is_binary(issue_id) do
+    rebase_targets = build_rebase_targets(next_queue, state)
+
+    task =
+      Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+        process_merge_task(issue_id, rebase_targets)
+      end)
+
+    Logger.info("Queued merge task started for issue_id=#{issue_id} issue_identifier=#{entry.issue_identifier || issue_id}")
+
+    %{
+      state
+      | merge_queue: next_queue,
+        merge_in_progress: issue_id,
+        merge_current_entry: entry,
+        merge_task_ref: task.ref
+    }
   end
 
   defp build_rebase_targets(merge_queue, %State{} = state) when is_map(merge_queue) do

@@ -647,6 +647,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:server, with: &Server.changeset/2)
   end
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp finalize_settings(settings) do
     tracker = %{
       settings.tracker

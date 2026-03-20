@@ -297,6 +297,7 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp validate_merge_semantics(settings) do
     merge = settings.merge
 
