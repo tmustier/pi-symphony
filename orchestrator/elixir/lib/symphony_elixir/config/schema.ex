@@ -210,6 +210,11 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    @type t :: %__MODULE__{
+            provider: String.t() | nil,
+            model_id: String.t() | nil
+          }
+
     @primary_key false
     embedded_schema do
       field(:provider, :string)
