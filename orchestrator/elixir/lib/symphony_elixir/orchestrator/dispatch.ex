@@ -26,6 +26,11 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
 
   @doc """
   Determine if an issue should be dispatched based on current state.
+
+  When the merge queue strategy is `"queue"`, dispatch is blocked while merges
+  are queued or in progress. This prevents launching workers whose branches
+  would immediately go stale once queued PRs are merged and rebased —
+  the root cause of rebase loops with parallel workers.
   """
   @spec should_dispatch_issue?(Issue.t(), State.t(), MapSet.t(String.t()), MapSet.t(String.t()), map()) :: boolean()
   def should_dispatch_issue?(
@@ -41,7 +46,31 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
       !Map.has_key?(running, issue.id) and
       available_slots(state) > 0 and
       state_slots_available?(issue, running) and
-      worker_slots_available?(state)
+      worker_slots_available?(state) and
+      !merge_queue_blocks_dispatch?(state)
+  end
+
+  @doc """
+  Check whether the merge queue blocks new dispatches.
+
+  When `merge.strategy` is `"queue"`, new dispatches are blocked while the merge
+  queue has entries or a merge is in progress. Workers started during a merge
+  drain would branch from a stale base, requiring rebases that cascade into the
+  exact rebase loops this queue is designed to prevent.
+  """
+  @spec merge_queue_blocks_dispatch?(State.t()) :: boolean()
+  def merge_queue_blocks_dispatch?(%State{
+        merge_queue: merge_queue,
+        merge_in_progress: merge_in_progress
+      }) do
+    queue_strategy_active?() and
+      (map_size(merge_queue) > 0 or is_binary(merge_in_progress))
+  end
+
+  @spec queue_strategy_active?() :: boolean()
+  defp queue_strategy_active? do
+    settings = Config.settings!()
+    settings.merge.mode == "auto" and settings.merge.strategy == "queue"
   end
 
   @spec candidate_issue?(Issue.t(), MapSet.t(String.t()), MapSet.t(String.t())) :: boolean()
@@ -348,9 +377,14 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @spec dispatch_slots_available?(Issue.t(), State.t()) :: boolean()
   @doc """
   Check if dispatch slots are available for an issue.
+
+  Also blocked when the merge queue is draining to prevent creating branches
+  against a stale base.
   """
   def dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
-    available_slots(state) > 0 and state_slots_available?(issue, state.running)
+    available_slots(state) > 0 and
+      state_slots_available?(issue, state.running) and
+      !merge_queue_blocks_dispatch?(state)
   end
 
   @spec available_slots(State.t()) :: non_neg_integer()
