@@ -27,13 +27,13 @@ defmodule SymphonyElixir.PiAnalytics do
       local_path = local_events_path(now)
 
       write_record(local_path, record, :local)
-      maybe_mirror_to_home(local_path, record, now)
+      maybe_mirror_to_home(record, local_path, now)
     end
 
     :ok
   end
 
-  defp maybe_mirror_to_home(local_path, record, now) do
+  defp maybe_mirror_to_home(record, local_path, now) do
     if home_mirror_enabled?() do
       home_path = home_events_path(now)
 
@@ -276,10 +276,8 @@ defmodule SymphonyElixir.PiAnalytics do
   defp present_string(_value), do: nil
 
   defp hostname do
-    case :inet.gethostname() do
-      {:ok, name} -> to_string(name)
-      _ -> nil
-    end
+    {:ok, name} = :inet.gethostname()
+    to_string(name)
   end
 
   defp username do
