@@ -36,8 +36,8 @@ pi:
   session_dir_name: .pi-rpc-sessions
   model:
     provider: anthropic
-    model_id: claude-sonnet-4-20250514
-  thinking_level: high
+    model_id: claude-opus-4-6
+  thinking_level: xhigh
   extension_paths:
     - ../extensions/workspace-guard/index.ts
     - ../extensions/proof/index.ts

@@ -48,8 +48,8 @@ Worker process configuration.
 | `command` | `pi` | Path to the pi binary. Use absolute path if pi isn't in PATH. |
 | `response_timeout_ms` | 60000 | Timeout waiting for a Pi RPC response. |
 | `session_dir_name` | `.pi-rpc-sessions` | Subdirectory name for Pi session files within the workspace. |
-| `model.provider` | — | Model provider (e.g. `anthropic`, `openai`). |
-| `model.model_id` | — | Model ID (e.g. `claude-sonnet-4-20250514`, `gpt-5.4`). |
+| `model.provider` | — | Model provider (e.g. `anthropic`, `openai-codex`). |
+| `model.model_id` | — | Model ID. Use current models only: `claude-opus-4-6` (best), `claude-sonnet-4-6` (fast), `gpt-5.4`. Do NOT use deprecated dated models like `claude-sonnet-4-20250514`. |
 | `thinking_level` | — | Thinking level for workers (`off`, `low`, `medium`, `high`, `xhigh`). |
 | `extension_paths` | `[]` | Paths to worker extensions, resolved relative to WORKFLOW.md. |
 | `disable_extensions` | `true` | Disable ambient extension discovery in workers. Recommended. |

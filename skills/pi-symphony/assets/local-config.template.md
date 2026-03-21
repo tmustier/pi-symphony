@@ -1,38 +1,50 @@
 # Symphony Local Configuration
 
-This file contains user-specific configuration for pi-symphony.
-Copy this to `LOCAL.md` (in the skill directory) and fill in your details.
-`LOCAL.md` is gitignored — your credentials and setup stay local.
+User-specific config for pi-symphony. Copy to `LOCAL.md` in the skill directory and fill in.
+`LOCAL.md` is gitignored — credentials stay local.
 
-## Linear Access
+## Linear Access via MCPorter
 
-How this agent should check Linear issues for symphony runs.
+Linear is accessed through MCPorter. The credentials and OAuth are managed by MCPorter centrally —
+once authenticated, it works across all Pi sessions without additional setup.
 
-### Access Method
+### MCPorter CLI command pattern
 
-<!-- Uncomment and configure ONE of these methods: -->
+All Linear operations use this pattern:
 
-<!-- Option 1: MCPorter (if you have Linear MCP via MCPorter) -->
-<!-- Linear is available via MCPorter. Use: -->
-<!-- mcporter action=call selector=linear.list_issues args='{"teamId": "YOUR_TEAM_ID"}' -->
-<!-- mcporter action=call selector=linear.get_issue args='{"issueId": "ISSUE-123"}' -->
+```bash
+npx mcporter --config /Users/thomasmustier/projects/mcporter/config/mcporter.json call linear.<tool> [args...]
+```
 
-<!-- Option 2: MCP server -->
-<!-- Linear is available as an MCP server. Use the mcp() tool. -->
+### Common operations
 
-<!-- Option 3: Direct API -->
-<!-- Use curl with the Linear GraphQL API: -->
-<!-- curl -s -X POST https://api.linear.app/graphql \
-<!--   -H "Authorization: $LINEAR_API_KEY" \
-<!--   -H "Content-Type: application/json" \
-<!--   -d '{"query": "{ issues(filter: {team: {key: {eq: \"TEAM\"}}}) { nodes { identifier title state { name } } } }"}' -->
+```bash
+MCPC="/Users/thomasmustier/projects/mcporter/config/mcporter.json"
+
+# List issues in a project
+npx mcporter --config "$MCPC" call linear.list_issues team=SYM
+
+# Get a specific issue
+npx mcporter --config "$MCPC" call linear.get_issue id=SYM-19
+
+# Create/update an issue
+npx mcporter --config "$MCPC" call linear.save_issue title="..." team=symphony project=pi-symphony state=Todo 'labels=["symphony"]'
+
+# List projects
+npx mcporter --config "$MCPC" call linear.list_projects
+
+# List available tools
+npx mcporter --config "$MCPC" list linear
+```
 
 ### Team Configuration
 
-- Team key: CHANGEME
-- Project slug (optional): 
+- Team key: SYM
+- Team name: symphony
 
-### Common Queries
+### Authentication
 
-<!-- Add any project-specific queries, label conventions, or workflow notes here. -->
-<!-- Example: "THO issues with the 'symphony' label are orchestrated." -->
+If Linear auth expires, re-authenticate:
+```bash
+npx mcporter --config "$MCPC" auth linear
+```

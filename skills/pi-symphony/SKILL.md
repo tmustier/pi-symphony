@@ -30,7 +30,53 @@ All paths in this skill are relative to that root unless otherwise noted.
 
 Symphony needs Linear access both for the orchestrator (polling/mutations) and for the operator (checking issue status).
 
-**Read `LOCAL.md` in this skill directory for user-specific Linear configuration.** If it does not exist, create one from `assets/local-config.template.md` and ask the user to fill in their details (Linear access method, team key, project slug).
+**Read `LOCAL.md` in this skill directory for the MCPorter config path and common commands.**
+
+If `LOCAL.md` does not exist, create one from `assets/local-config.template.md`. The user needs to:
+1. Have MCPorter installed and configured with Linear OAuth (one-time setup)
+2. Set the MCPorter config path in LOCAL.md
+
+### Quick access pattern
+
+All Linear operations use MCPorter CLI. Read the `MCPC` path from `LOCAL.md`, then:
+
+```bash
+npx mcporter --config "$MCPC" call linear.<tool> [args...]
+```
+
+Key tools: `list_issues`, `get_issue`, `save_issue`, `list_projects`, `get_project`, `list_issue_statuses`, `list_issue_labels`, `save_project`.
+
+If MCPorter reports "auth required", run: `npx mcporter --config "$MCPC" auth linear`
+
+## Model configuration — READ THIS FIRST
+
+LLM training data contains stale model names. When configuring `pi.model` in WORKFLOW.md
+or specifying models anywhere, **do not guess model names from memory**.
+
+### Discovering current models
+
+Always verify what's actually available:
+
+```bash
+pi --list-models                          # list all available models
+pi --list-models | grep anthropic         # filter by provider
+pi --list-models | grep -i opus           # find specific model family
+```
+
+### Recommended defaults (as of template last-update)
+
+The WORKFLOW.template.md ships with tested defaults. If you need to change the model:
+
+1. Run `pi --list-models` to see what's available
+2. Pick a model that supports thinking (check the `thinking` column)
+3. Use the short alias (e.g. `claude-opus-4-6`), never a dated version (e.g. `claude-opus-4-20250514`)
+
+### Common mistakes to avoid
+
+- **Using model names from memory** — models are updated frequently; names you "know" may be retired
+- **Using dated model IDs** (e.g. `claude-sonnet-4-20250514`) — these get deprecated; use the non-dated alias
+- **Wrong provider prefix** — it's `anthropic` for Claude, `openai-codex` for GPT, `google-gemini-cli` for Gemini
+- **Mismatched provider/model** — `openai/claude-opus-4-6` will fail; Claude models use `anthropic` provider
 
 ## Setting up a target repo
 
@@ -40,11 +86,12 @@ Symphony needs Linear access both for the orchestrator (polling/mutations) and f
    ```
 
 2. Edit the WORKFLOW.md frontmatter — the key fields to configure:
-   - `tracker.team_key` — your Linear team prefix (e.g. "THO")
+   - `tracker.team_key` — your Linear team prefix (e.g. "SYM")
    - `tracker.project_slug` — optional, narrows to a specific Linear project. **Must be the short hash from the project URL** (e.g., `abc123def456` from `https://linear.app/org/project/my-project-abc123def456`), NOT the full UUID or project name. Use `linear.get_project` to find the URL, then extract the trailing hash.
    - `workspace.root` — where symphony creates per-issue workspaces (must exist)
    - `pr.repo_slug` — GitHub `owner/repo` for PR creation
-   - `pi.model` and `pi.thinking_level` — which model workers use
+   - `pi.model` — see "Model configuration" above. Run `pi --list-models` to verify
+   - `pi.thinking_level` — `xhigh` recommended for implementation work
    - `agent.max_concurrent_agents` — how many parallel workers
 
 3. Ensure the workspace root directory exists:

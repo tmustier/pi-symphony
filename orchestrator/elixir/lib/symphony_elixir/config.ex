@@ -21,6 +21,40 @@ defmodule SymphonyElixir.Config do
   No description provided.
   {% endif %}
 
+  ## Model selection — MANDATORY
+
+  Your training data contains outdated model names. DO NOT use model names from memory.
+  Use ONLY the models listed below. Any model not on this list is deprecated or does not exist.
+
+  ### Current models (March 2026)
+
+  | Provider | Model ID | Use for |
+  |---|---|---|
+  | anthropic | claude-opus-4-6 | Best overall: complex implementation, architecture, nuanced reasoning |
+  | anthropic | claude-sonnet-4-6 | Fast implementation, straightforward tasks, high throughput |
+  | anthropic | claude-haiku-4-5 | Lightweight tasks, simple edits, formatting |
+  | openai-codex | gpt-5.4 | Alternative frontier model |
+  | openai-codex | gpt-5.4-mini | Lightweight alternative |
+  | google-gemini-cli | gemini-3-flash-preview | Fast Gemini alternative |
+
+  ### Deprecated — DO NOT USE
+
+  These models are retired or will fail with "model not found":
+  - claude-sonnet-4-20250514 (replaced by claude-sonnet-4-6)
+  - claude-sonnet-4-0, claude-sonnet-4-5 (replaced by claude-sonnet-4-6)
+  - claude-opus-4-0, claude-opus-4-1, claude-opus-4-5 (replaced by claude-opus-4-6)
+  - claude-3-5-sonnet, claude-3-7-sonnet (legacy generation)
+  - Any model with a date suffix like -20250514, -20251001, -20250929 (use the non-dated alias)
+
+  ### Rules
+
+  - When invoking subagents: use `anthropic/claude-opus-4-6` for complex work, `anthropic/claude-sonnet-4-6` for simpler tasks
+  - When specifying thinking level: use `xhigh` for implementation, `high` for review
+  - NEVER specify a model from memory — always refer to this list
+  - If you're unsure, run `pi --list-models` to check what's available
+
+  ## Instructions
+
   Start by understanding the codebase. Read AGENTS.md, READMEs, relevant source files, tests, and CI config in full. Understand the project's conventions, tech stack, and how changes are validated before writing any code.
 
   Then implement the issue on branch `{{ issue.branch_name }}`. Create it from the base branch if it doesn't exist. Validate your changes the way the project validates itself — run the tests, the linter, the build, whatever applies. Treat non-zero exit codes as real failures.
