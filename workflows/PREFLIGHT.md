@@ -29,7 +29,11 @@ Run through this before launching a Symphony run to avoid the issues we hit on t
 
 - [ ] `LINEAR_API_KEY` is exported (not just in `.env.local` — the escript subprocess needs it)
   ```bash
-  export LINEAR_API_KEY=lin_api_...
+  # Preferred: retrieve from macOS Keychain
+  export LINEAR_API_KEY=$(security find-generic-password -a "pi-symphony" -s "LINEAR_API_KEY" -w)
+  
+  # First-time setup: store in Keychain
+  # security add-generic-password -a "pi-symphony" -s "LINEAR_API_KEY" -w "lin_api_..." -U
   ```
 - [ ] `gh` CLI is authenticated: `gh auth status`
 - [ ] `pi` is available: `which pi && pi --version`

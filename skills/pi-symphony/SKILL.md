@@ -120,7 +120,9 @@ cd ~/.pi/agent/git/github.com/tmustier/pi-symphony/orchestrator/elixir
 mise exec -- mix build
 
 # 2. Ensure environment
-export LINEAR_API_KEY=lin_api_...  # must be in shell, not just .env
+# LINEAR_API_KEY: retrieve from macOS Keychain (preferred) or set manually
+export LINEAR_API_KEY=$(security find-generic-password -a "pi-symphony" -s "LINEAR_API_KEY" -w 2>/dev/null)
+# If not in keychain, store it: security add-generic-password -a "pi-symphony" -s "LINEAR_API_KEY" -w "lin_api_..." -U
 gh auth status                     # GitHub CLI must be authenticated
 which pi && pi --version           # Pi must be available
 ```
@@ -129,7 +131,7 @@ which pi && pi --version           # Pi must be available
 
 ```bash
 cd ~/.pi/agent/git/github.com/tmustier/pi-symphony/orchestrator/elixir
-export LINEAR_API_KEY=lin_api_...
+export LINEAR_API_KEY=$(security find-generic-password -a "pi-symphony" -s "LINEAR_API_KEY" -w)
 
 nohup mise exec -- ./bin/symphony \
   /path/to/target-repo/WORKFLOW.md \
