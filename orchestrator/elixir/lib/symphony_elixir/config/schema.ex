@@ -93,12 +93,16 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     embedded_schema do
       field(:root, :string, default: Path.join(System.tmp_dir!(), "symphony_workspaces"))
+      field(:cleanup_on_shutdown, :boolean, default: true)
+      field(:cleanup_after_merge, :boolean, default: true)
+      field(:retention_hours, :float)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:root], empty_values: [])
+      |> cast(attrs, [:root, :cleanup_on_shutdown, :cleanup_after_merge, :retention_hours], empty_values: [])
+      |> validate_number(:retention_hours, greater_than: 0)
     end
   end
 
