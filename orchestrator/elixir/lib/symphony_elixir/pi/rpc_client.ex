@@ -334,10 +334,11 @@ defmodule SymphonyElixir.Pi.RpcClient do
       |> Enum.reject(&(&1 in [nil, false, ""]))
       |> Enum.join(" ")
 
-    case tracker_env_assignments(settings) do
-      [] -> "exec #{flags}"
-      assignments -> "exec env #{Enum.join(assignments, " ")} #{flags}"
-    end
+    # headless_git_env_assignments/0 always returns at least two entries,
+    # so the combined list is guaranteed non-empty.
+    all_assignments = headless_git_env_assignments() ++ tracker_env_assignments(settings)
+
+    "exec env #{Enum.join(all_assignments, " ")} #{flags}"
   end
 
   defp send_message(port, message) do
@@ -361,6 +362,17 @@ defmodule SymphonyElixir.Pi.RpcClient do
   defp unique_suffix do
     integer = System.unique_integer([:positive])
     Integer.to_string(integer)
+  end
+
+  # Prevent git from spawning interactive editors or terminal prompts
+  # in headless worker environments. Without these, operations like
+  # `git rebase --continue` open vi and block the process forever.
+  # See: https://github.com/tmustier/pi-symphony/issues/58
+  defp headless_git_env_assignments do
+    [
+      env_assignment("GIT_EDITOR", "true"),
+      env_assignment("GIT_TERMINAL_PROMPT", "0")
+    ]
   end
 
   defp tracker_env_assignments(settings) do

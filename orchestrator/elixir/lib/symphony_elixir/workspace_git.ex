@@ -37,7 +37,10 @@ defmodule SymphonyElixir.WorkspaceGit do
         {:error, :bash_not_found}
 
       bash ->
-        case System.cmd(bash, ["-lc", inspect_script(workspace)], stderr_to_stdout: true) do
+        case System.cmd(bash, ["-lc", inspect_script(workspace)],
+               stderr_to_stdout: true,
+               env: [{"GIT_EDITOR", "true"}, {"GIT_TERMINAL_PROMPT", "0"}]
+             ) do
           {output, 0} -> {:ok, parse_inspect_output(output)}
           {output, status} -> {:error, {:workspace_git_inspect_failed, status, output}}
         end
