@@ -1523,8 +1523,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp retry_scheduled?(_state, _issue_id), do: false
 
   defp termination_note(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp termination_note(reason) when is_binary(reason), do: reason
-  defp termination_note(reason), do: inspect(reason)
 
   defp refresh_runtime_config(%State{} = state) do
     config = Config.settings!()
