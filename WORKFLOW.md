@@ -19,7 +19,7 @@ tracker:
 polling:
   interval_ms: 30000
 workspace:
-  root: "$PI_SYMPHONY_WORKSPACE_ROOT"
+  root: ~/code/symphony-workspaces/pi-symphony
 worker:
   runtime: pi
 agent:
@@ -74,10 +74,11 @@ pr:
 review:
   enabled: true
   agent: pr-reviewer
-  model:
-    provider: openai-codex
-    model_id: gpt-5.4
-  thinking_level: high
+  # TODO(SYM-21): model/thinking_level for review not yet supported in schema
+  # model:
+  #   provider: openai-codex
+  #   model_id: gpt-5.4
+  # thinking_level: high
   output_format: structured_markdown_v1
   max_passes: 2
   fix_consideration_severities:
