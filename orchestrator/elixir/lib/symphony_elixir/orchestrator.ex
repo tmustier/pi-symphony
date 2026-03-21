@@ -163,45 +163,7 @@ defmodule SymphonyElixir.Orchestrator do
         session_id = running_entry_session_id(running_entry)
 
         {state, analytics_status, analytics_note} =
-          case reason do
-            :normal ->
-              Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; evaluating continuation policy")
-
-              updated_state =
-                state
-                |> complete_issue(issue_id)
-                |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
-                |> maybe_schedule_continuation_retry(issue_id, running_entry)
-
-              if retry_scheduled?(updated_state, issue_id) do
-                {updated_state, "waiting", "continuation_retry_scheduled"}
-              else
-                {updated_state, "success", "agent_task_completed"}
-              end
-
-            _ ->
-              Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
-
-              next_attempt = Retry.next_retry_attempt_from_running(running_entry)
-
-              updated_state =
-                Retry.schedule_issue_retry(
-                  state,
-                  issue_id,
-                  next_attempt,
-                  Map.merge(
-                    %{
-                      identifier: running_entry.identifier,
-                      error: "agent exited: #{inspect(reason)}",
-                      worker_host: Map.get(running_entry, :worker_host),
-                      workspace_path: Map.get(running_entry, :workspace_path)
-                    },
-                    Retry.retry_runtime_metadata(running_entry)
-                  )
-                )
-
-              {updated_state, "error", "agent_task_exited"}
-          end
+          handle_agent_exit_reason(state, reason, issue_id, session_id, running_entry)
 
         emit_symphony_run_analytics(running_entry, analytics_status, analytics_note, %{
           retry_scheduled: retry_scheduled?(state, issue_id),
@@ -1299,6 +1261,46 @@ defmodule SymphonyElixir.Orchestrator do
     do: session_id
 
   defp running_entry_session_id(_running_entry), do: "n/a"
+
+  defp handle_agent_exit_reason(state, :normal, issue_id, session_id, running_entry) do
+    Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; evaluating continuation policy")
+
+    updated_state =
+      state
+      |> complete_issue(issue_id)
+      |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
+      |> maybe_schedule_continuation_retry(issue_id, running_entry)
+
+    if retry_scheduled?(updated_state, issue_id) do
+      {updated_state, "waiting", "continuation_retry_scheduled"}
+    else
+      {updated_state, "success", "agent_task_completed"}
+    end
+  end
+
+  defp handle_agent_exit_reason(state, reason, issue_id, session_id, running_entry) do
+    Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
+
+    next_attempt = Retry.next_retry_attempt_from_running(running_entry)
+
+    updated_state =
+      Retry.schedule_issue_retry(
+        state,
+        issue_id,
+        next_attempt,
+        Map.merge(
+          %{
+            identifier: running_entry.identifier,
+            error: "agent exited: #{inspect(reason)}",
+            worker_host: Map.get(running_entry, :worker_host),
+            workspace_path: Map.get(running_entry, :workspace_path)
+          },
+          Retry.retry_runtime_metadata(running_entry)
+        )
+      )
+
+    {updated_state, "error", "agent_task_exited"}
+  end
 
   defp issue_context(%Issue{id: issue_id, identifier: identifier}) do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
