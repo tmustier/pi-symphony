@@ -75,11 +75,10 @@ pr:
 review:
   enabled: true
   agent: pr-reviewer
-  # TODO(SYM-21): model/thinking_level for review not yet supported in schema
-  # model:
-  #   provider: openai-codex
-  #   model_id: gpt-5.4
-  # thinking_level: high
+  model:
+    provider: openai-codex
+    model_id: gpt-5.4
+  thinking_level: high
   output_format: structured_markdown_v1
   max_passes: 2
   fix_consideration_severities:

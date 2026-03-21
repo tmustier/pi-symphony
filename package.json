@@ -1,8 +1,15 @@
 {
   "name": "pi-symphony",
-  "private": true,
+  "version": "0.3.0",
+  "description": "Unattended issue orchestration for Pi — polls Linear, spawns workers, manages PRs",
   "type": "module",
-  "keywords": ["pi-package"],
+  "keywords": ["pi-package", "pi", "orchestration", "linear", "automation"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tmustier/pi-symphony.git"
+  },
+  "author": "Thomas Mustier",
+  "license": "MIT",
   "pi": {
     "skills": ["./skills"]
   },

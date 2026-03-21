@@ -1,0 +1,32 @@
+# Dev / build artifacts
+orchestrator/elixir/_build/
+orchestrator/elixir/deps/
+orchestrator/elixir/.elixir_ls/
+orchestrator/elixir/cover/
+orchestrator/elixir/priv/plts/
+orchestrator/elixir/pi-analytics/
+node_modules/
+coverage/
+dist/
+.turbo/
+tmp/
+
+# IDE / editor
+.idea/
+.vscode/
+.DS_Store
+
+# Local config
+.env
+.env.*
+*.log
+skills/pi-symphony/LOCAL.md
+.pi-rpc-sessions/
+.ralph/
+
+# Test artifacts
+*.tsbuildinfo
+
+# Git
+.git/
+.github/
