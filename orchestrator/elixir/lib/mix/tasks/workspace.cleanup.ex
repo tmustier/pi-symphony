@@ -65,7 +65,7 @@ defmodule Mix.Tasks.Workspace.Cleanup do
 
     active_identifiers =
       if all? do
-        MapSet.new()
+        []
       else
         fetch_active_identifiers()
       end
@@ -97,10 +97,10 @@ defmodule Mix.Tasks.Workspace.Cleanup do
           _ ->
             []
         end)
-        |> MapSet.new()
+        |> Enum.uniq()
 
       {:error, _reason} ->
-        MapSet.new()
+        []
     end
   end
 

@@ -72,7 +72,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
 
-      active = MapSet.new(["SYM-10"])
+      active = ["SYM-10"]
       assert {:ok, stale} = Workspace.stale_workspaces(active)
 
       stale_ids = Enum.map(stale, & &1.identifier) |> Enum.sort()
@@ -95,7 +95,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
 
-      active = MapSet.new(["SYM-20"])
+      active = ["SYM-20"]
       assert {:ok, []} = Workspace.stale_workspaces(active)
     after
       File.rm_rf(workspace_root)
@@ -119,7 +119,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
 
-      active = MapSet.new(["SYM-31"])
+      active = ["SYM-31"]
       assert {:ok, removed, []} = Workspace.cleanup_stale(active)
       assert length(removed) == 1
       assert hd(removed).identifier == "SYM-30"
@@ -145,7 +145,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
 
-      active = MapSet.new()
+      active = []
       # With 24h retention, a just-created workspace should be retained
       assert {:ok, removed, retained} = Workspace.cleanup_stale(active, 24.0)
       assert removed == []
@@ -170,7 +170,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
 
-      active = MapSet.new()
+      active = []
       assert {:ok, removed, retained} = Workspace.cleanup_stale(active, nil)
       assert length(removed) == 1
       assert retained == []

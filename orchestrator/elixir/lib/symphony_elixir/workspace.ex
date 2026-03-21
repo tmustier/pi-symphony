@@ -120,15 +120,17 @@ defmodule SymphonyElixir.Workspace do
   used for workspace directory names). Each returned entry includes an
   `:age_hours` field computed from the directory's modification time.
   """
-  @spec stale_workspaces(MapSet.t(String.t())) ::
+  @spec stale_workspaces([String.t()]) ::
           {:ok, [%{identifier: String.t(), path: Path.t(), age_hours: float()}]} | {:error, term()}
-  def stale_workspaces(%MapSet{} = active_identifiers) do
+  def stale_workspaces(active_identifiers) when is_list(active_identifiers) do
+    active_set = MapSet.new(active_identifiers)
+
     with {:ok, workspaces} <- list_workspaces() do
       now = System.os_time(:second)
 
       stale =
         workspaces
-        |> Enum.reject(&MapSet.member?(active_identifiers, &1.identifier))
+        |> Enum.reject(&MapSet.member?(active_set, &1.identifier))
         |> Enum.map(fn entry ->
           age_hours = workspace_age_hours(entry.path, now)
           Map.put(entry, :age_hours, age_hours)
@@ -146,9 +148,9 @@ defmodule SymphonyElixir.Workspace do
   removed and retained workspace entries.
   """
   @type workspace_entry :: %{identifier: String.t(), path: Path.t(), age_hours: float()}
-  @spec cleanup_stale(MapSet.t(String.t()), number() | nil) ::
+  @spec cleanup_stale([String.t()], number() | nil) ::
           {:ok, [workspace_entry()], [workspace_entry()]} | {:error, term()}
-  def cleanup_stale(%MapSet{} = active_identifiers, retention_hours \\ nil) do
+  def cleanup_stale(active_identifiers, retention_hours \\ nil) when is_list(active_identifiers) do
     with {:ok, stale} <- stale_workspaces(active_identifiers) do
       {to_remove, to_retain} = partition_by_retention(stale, retention_hours)
 

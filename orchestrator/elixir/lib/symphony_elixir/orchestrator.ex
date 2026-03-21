@@ -1312,7 +1312,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  @spec active_issue_identifiers(State.t()) :: MapSet.t(String.t())
+  @spec active_issue_identifiers(State.t()) :: [String.t()]
   defp active_issue_identifiers(%State{} = state) do
     running_identifiers =
       state.running
@@ -1334,7 +1334,7 @@ defmodule SymphonyElixir.Orchestrator do
         end
       end)
 
-    MapSet.new(running_identifiers ++ retry_identifiers)
+    Enum.uniq(running_identifiers ++ retry_identifiers)
   end
 
   defp safe_identifier_for_workspace(identifier) do
@@ -1373,7 +1373,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp warn_stale_workspaces(_state, _issues), do: :ok
 
-  @spec all_known_identifiers(State.t(), [Issue.t()]) :: MapSet.t(String.t())
+  @spec all_known_identifiers(State.t(), [Issue.t()]) :: [String.t()]
   defp all_known_identifiers(%State{} = state, issues) when is_list(issues) do
     issue_identifiers =
       Enum.flat_map(issues, fn
@@ -1381,8 +1381,7 @@ defmodule SymphonyElixir.Orchestrator do
         _ -> []
       end)
 
-    running = active_issue_identifiers(state)
-    MapSet.union(running, MapSet.new(issue_identifiers))
+    Enum.uniq(active_issue_identifiers(state) ++ issue_identifiers)
   end
 
   defp notify_dashboard do

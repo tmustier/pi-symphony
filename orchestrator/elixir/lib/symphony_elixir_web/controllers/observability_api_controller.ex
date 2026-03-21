@@ -130,10 +130,10 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
           _ ->
             []
         end)
-        |> MapSet.new()
+        |> Enum.uniq()
 
       {:error, _reason} ->
-        MapSet.new()
+        []
     end
   end
 
