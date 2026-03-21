@@ -121,10 +121,11 @@ defmodule SymphonyElixir.MergeQueueDispatchTest do
       refute Orchestrator.merge_queue_blocks_dispatch_for_test(state)
     end
 
-    test "returns true when queue strategy is active and merge queue has entries" do
+    test "returns true when queue strategy is active, rollout is merge, and queue has entries" do
       write_workflow_file!(Workflow.workflow_file_path(),
         merge_mode: "auto",
-        merge_strategy: "queue"
+        merge_strategy: "queue",
+        rollout_mode: "merge"
       )
 
       state =
@@ -139,15 +140,47 @@ defmodule SymphonyElixir.MergeQueueDispatchTest do
       assert Orchestrator.merge_queue_blocks_dispatch_for_test(state)
     end
 
-    test "returns true when queue strategy is active and a merge is in progress" do
+    test "returns true when queue strategy is active, rollout is merge, and a merge is in progress" do
       write_workflow_file!(Workflow.workflow_file_path(),
         merge_mode: "auto",
-        merge_strategy: "queue"
+        merge_strategy: "queue",
+        rollout_mode: "merge"
       )
 
       state = empty_state(%{merge_in_progress: "issue-1"})
 
       assert Orchestrator.merge_queue_blocks_dispatch_for_test(state)
+    end
+
+    test "returns false when queue strategy is active but rollout mode is mutate (deadlock prevention)" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        merge_mode: "auto",
+        merge_strategy: "queue",
+        rollout_mode: "mutate"
+      )
+
+      state =
+        empty_state(%{
+          merge_queue:
+            MergeQueue.add(%{}, "issue-1", %{number: 42}, 1,
+              issue_identifier: "SYM-1",
+              enqueued_at_ms: 100
+            )
+        })
+
+      refute Orchestrator.merge_queue_blocks_dispatch_for_test(state)
+    end
+
+    test "returns false when queue strategy is active but rollout mode is observe" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        merge_mode: "auto",
+        merge_strategy: "queue",
+        rollout_mode: "observe"
+      )
+
+      state = empty_state(%{merge_in_progress: "issue-1"})
+
+      refute Orchestrator.merge_queue_blocks_dispatch_for_test(state)
     end
   end
 
@@ -156,10 +189,11 @@ defmodule SymphonyElixir.MergeQueueDispatchTest do
   # ---------------------------------------------------------------------------
 
   describe "should_dispatch_issue? with merge queue" do
-    test "blocks dispatch when merge queue is draining" do
+    test "blocks dispatch when merge queue is draining in merge rollout" do
       write_workflow_file!(Workflow.workflow_file_path(),
         merge_mode: "auto",
         merge_strategy: "queue",
+        rollout_mode: "merge",
         tracker_active_states: ["Todo", "In Progress"],
         tracker_terminal_states: ["Done", "Closed"]
       )
@@ -177,10 +211,33 @@ defmodule SymphonyElixir.MergeQueueDispatchTest do
       refute Orchestrator.should_dispatch_issue_for_test(new_issue, state)
     end
 
+    test "allows dispatch when merge queue has items but rollout is mutate" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        merge_mode: "auto",
+        merge_strategy: "queue",
+        rollout_mode: "mutate",
+        tracker_active_states: ["Todo", "In Progress"],
+        tracker_terminal_states: ["Done", "Closed"]
+      )
+
+      state =
+        empty_state(%{
+          merge_queue:
+            MergeQueue.add(%{}, "merge-issue", %{number: 42}, 1,
+              issue_identifier: "SYM-99",
+              enqueued_at_ms: 100
+            )
+        })
+
+      new_issue = issue("new-issue", "SYM-100")
+      assert Orchestrator.should_dispatch_issue_for_test(new_issue, state)
+    end
+
     test "allows dispatch when merge queue is empty and strategy is queue" do
       write_workflow_file!(Workflow.workflow_file_path(),
         merge_mode: "auto",
         merge_strategy: "queue",
+        rollout_mode: "merge",
         tracker_active_states: ["Todo", "In Progress"],
         tracker_terminal_states: ["Done", "Closed"]
       )
@@ -496,10 +553,11 @@ defmodule SymphonyElixir.MergeQueueDispatchTest do
   # ---------------------------------------------------------------------------
 
   describe "dispatch_slots_available? with merge queue" do
-    test "returns false when merge queue is draining under queue strategy" do
+    test "returns false when merge queue is draining under queue strategy in merge rollout" do
       write_workflow_file!(Workflow.workflow_file_path(),
         merge_mode: "auto",
         merge_strategy: "queue",
+        rollout_mode: "merge",
         tracker_active_states: ["In Progress"],
         tracker_terminal_states: ["Done"]
       )
@@ -518,10 +576,34 @@ defmodule SymphonyElixir.MergeQueueDispatchTest do
       refute Dispatch.dispatch_slots_available?(issue, state)
     end
 
+    test "returns true when merge queue has items but rollout is mutate" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        merge_mode: "auto",
+        merge_strategy: "queue",
+        rollout_mode: "mutate",
+        tracker_active_states: ["In Progress"],
+        tracker_terminal_states: ["Done"]
+      )
+
+      state =
+        empty_state(%{
+          merge_queue:
+            MergeQueue.add(%{}, "merge-issue", %{number: 42}, 1,
+              issue_identifier: "SYM-99",
+              enqueued_at_ms: 100
+            )
+        })
+
+      issue = issue("other-issue", "SYM-200")
+
+      assert Dispatch.dispatch_slots_available?(issue, state)
+    end
+
     test "returns true when merge queue is empty under queue strategy" do
       write_workflow_file!(Workflow.workflow_file_path(),
         merge_mode: "auto",
         merge_strategy: "queue",
+        rollout_mode: "merge",
         tracker_active_states: ["In Progress"],
         tracker_terminal_states: ["Done"]
       )

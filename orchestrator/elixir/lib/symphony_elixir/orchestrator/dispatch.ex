@@ -53,10 +53,15 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Check whether the merge queue blocks new dispatches.
 
-  When `merge.strategy` is `"queue"`, new dispatches are blocked while the merge
-  queue has entries or a merge is in progress. Workers started during a merge
-  drain would branch from a stale base, requiring rebases that cascade into the
-  exact rebase loops this queue is designed to prevent.
+  When `merge.strategy` is `"queue"` **and** `rollout.mode` is `"merge"`, new
+  dispatches are blocked while the merge queue has entries or a merge is in
+  progress. Workers started during a merge drain would branch from a stale base,
+  requiring rebases that cascade into the exact rebase loops this queue is
+  designed to prevent.
+
+  The rollout mode gate is critical: in `"observe"` or `"mutate"` mode the
+  orchestrator cannot actually execute merges, so the queue can never drain.
+  Blocking dispatch without the ability to drain would deadlock the system.
   """
   @spec merge_queue_blocks_dispatch?(State.t()) :: boolean()
   def merge_queue_blocks_dispatch?(%State{
@@ -70,7 +75,10 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @spec queue_strategy_active?() :: boolean()
   defp queue_strategy_active? do
     settings = Config.settings!()
-    settings.merge.mode == "auto" and settings.merge.strategy == "queue"
+
+    settings.merge.mode == "auto" and
+      settings.merge.strategy == "queue" and
+      settings.rollout.mode == "merge"
   end
 
   @spec candidate_issue?(Issue.t(), MapSet.t(String.t()), MapSet.t(String.t())) :: boolean()
@@ -378,8 +386,8 @@ defmodule SymphonyElixir.Orchestrator.Dispatch do
   @doc """
   Check if dispatch slots are available for an issue.
 
-  Also blocked when the merge queue is draining to prevent creating branches
-  against a stale base.
+  Also blocked when the merge queue is draining in `"merge"` rollout mode to
+  prevent creating branches against a stale base.
   """
   def dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
     available_slots(state) > 0 and
