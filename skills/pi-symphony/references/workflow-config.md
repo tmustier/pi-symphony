@@ -104,6 +104,9 @@ Self-review configuration.
 | `output_format` | `structured_markdown_v1` | Review output format. |
 | `max_passes` | 2 | Maximum review-fix cycles. |
 | `fix_consideration_severities` | `[P0, P1, P2]` | Which severity findings trigger fixes. |
+| `model.provider` | — | Optional model provider for the review subagent (e.g. `anthropic`). When omitted, the worker's default model applies. |
+| `model.model_id` | — | Optional model ID for the review subagent (e.g. `claude-sonnet-4-6`). |
+| `thinking_level` | — | Optional thinking level for the review subagent (`off`, `low`, `medium`, `high`, `xhigh`). When omitted, the worker's default thinking level applies. |
 
 ## merge
 

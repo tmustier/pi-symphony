@@ -1586,6 +1586,92 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.settings!().pi.thinking_level == "xhigh"
   end
 
+  test "review section defaults model and thinking_level to nil when not set" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: false,
+      review_model_provider: nil,
+      review_model_id: nil,
+      review_thinking_level: nil
+    )
+
+    config = Config.settings!()
+    assert config.review.model == nil
+    assert config.review.thinking_level == nil
+  end
+
+  test "review section parses model and thinking_level when set" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_model_provider: "anthropic",
+      review_model_id: "claude-sonnet-4-6",
+      review_thinking_level: "high"
+    )
+
+    assert :ok = Config.validate!()
+    settings = Config.settings!()
+    assert settings.review.model.provider == "anthropic"
+    assert settings.review.model.model_id == "claude-sonnet-4-6"
+    assert settings.review.thinking_level == "high"
+  end
+
+  test "review model/thinking_level are independent of pi model/thinking_level" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      worker_runtime: "pi",
+      pi_model_provider: "anthropic",
+      pi_model_id: "claude-opus-4-6",
+      pi_thinking_level: "xhigh",
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_model_provider: "anthropic",
+      review_model_id: "claude-sonnet-4-6",
+      review_thinking_level: "high"
+    )
+
+    assert :ok = Config.validate!()
+    settings = Config.settings!()
+
+    assert settings.pi.model.provider == "anthropic"
+    assert settings.pi.model.model_id == "claude-opus-4-6"
+    assert settings.pi.thinking_level == "xhigh"
+
+    assert settings.review.model.provider == "anthropic"
+    assert settings.review.model.model_id == "claude-sonnet-4-6"
+    assert settings.review.thinking_level == "high"
+  end
+
+  test "review model/thinking_level appear in prompt policy" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_model_provider: "anthropic",
+      review_model_id: "claude-sonnet-4-6",
+      review_thinking_level: "high"
+    )
+
+    policy = Config.prompt_policy()
+    review_policy = policy["review"]
+
+    assert review_policy["thinking_level"] == "high"
+    assert review_policy["model"]["provider"] == "anthropic"
+    assert review_policy["model"]["model_id"] == "claude-sonnet-4-6"
+  end
+
+  test "review rejects invalid thinking_level values" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: true,
+      review_agent: "pr-reviewer",
+      review_output_format: "structured_markdown_v1",
+      review_thinking_level: "ultra"
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
+    assert message =~ "review.thinking_level"
+  end
+
   test "config validates orchestration policy sections" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",

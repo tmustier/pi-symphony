@@ -377,6 +377,8 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    alias SymphonyElixir.Config.Schema.PiModel
+
     @primary_key false
     embedded_schema do
       field(:enabled, :boolean, default: false)
@@ -384,13 +386,28 @@ defmodule SymphonyElixir.Config.Schema do
       field(:output_format, :string)
       field(:max_passes, :integer, default: 1)
       field(:fix_consideration_severities, {:array, :string}, default: [])
+      field(:thinking_level, :string)
+      embeds_one(:model, PiModel, on_replace: :update)
     end
+
+    @thinking_levels ["off", "minimal", "low", "medium", "high", "xhigh"]
+
+    @review_fields [
+      :enabled,
+      :agent,
+      :output_format,
+      :max_passes,
+      :fix_consideration_severities,
+      :thinking_level
+    ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:enabled, :agent, :output_format, :max_passes, :fix_consideration_severities], empty_values: [])
+      |> cast(attrs, @review_fields, empty_values: [])
+      |> cast_embed(:model, with: &PiModel.changeset/2)
       |> validate_number(:max_passes, greater_than: 0)
+      |> validate_inclusion(:thinking_level, @thinking_levels)
     end
   end
 
@@ -706,7 +723,9 @@ defmodule SymphonyElixir.Config.Schema do
       settings.review
       | agent: normalize_optional_string(settings.review.agent),
         output_format: normalize_optional_string(settings.review.output_format),
-        fix_consideration_severities: normalize_string_list(settings.review.fix_consideration_severities)
+        fix_consideration_severities: normalize_string_list(settings.review.fix_consideration_severities),
+        model: normalize_pi_model(settings.review.model),
+        thinking_level: normalize_pi_thinking_level(settings.review.thinking_level)
     }
 
     merge = %{
@@ -964,7 +983,7 @@ defmodule SymphonyElixir.Config.Schema do
       {"orchestration.ownership", ["required_label", "required_workpad_marker"]},
       {"rollout", ["mode", "preflight_required", "kill_switch_label", "kill_switch_file"]},
       {"pr", ["auto_create", "base_branch", "repo_slug", "reuse_branch_pr", "closed_pr_policy", "attach_to_tracker", "required_labels", "review_comment_mode", "review_comment_marker"]},
-      {"review", ["enabled", "agent", "output_format", "max_passes", "fix_consideration_severities"]},
+      {"review", ["enabled", "agent", "output_format", "max_passes", "fix_consideration_severities", "model", "thinking_level"]},
       {"merge", ["mode", "executor", "method", "strategy", "max_rebase_attempts", "require_green_checks", "require_head_match", "require_human_approval", "approval_states", "completion_state"]},
       {"recovery", ["enabled", "max_attempts"]}
     ]
