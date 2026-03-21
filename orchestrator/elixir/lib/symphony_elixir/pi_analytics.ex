@@ -275,6 +275,7 @@ defmodule SymphonyElixir.PiAnalytics do
 
   defp present_string(_value), do: nil
 
+  @dialyzer {:no_match, hostname: 0}
   defp hostname do
     {:ok, name} = :inet.gethostname()
     to_string(name)
