@@ -737,6 +737,16 @@ defmodule SymphonyElixir.Orchestrator do
   @spec handle_merge_task_down_for_test(term(), term()) :: term()
   def handle_merge_task_down_for_test(%State{} = state, reason), do: handle_merge_task_down(state, reason)
 
+  @doc false
+  @spec merge_queue_blocks_dispatch_for_test(term()) :: boolean()
+  def merge_queue_blocks_dispatch_for_test(%State{} = state),
+    do: Dispatch.merge_queue_blocks_dispatch?(state)
+
+  @doc false
+  @spec sync_merge_queue_for_test(term(), [Issue.t()]) :: term()
+  def sync_merge_queue_for_test(%State{} = state, issues) when is_list(issues),
+    do: sync_merge_queue(state, issues)
+
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
 
   defp reconcile_running_issue_states([issue | rest], state, active_states, terminal_states) do
