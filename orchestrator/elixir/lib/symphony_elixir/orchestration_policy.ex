@@ -27,7 +27,9 @@ defmodule SymphonyElixir.OrchestrationPolicy do
   @merge_strategies ["immediate", "queue"]
   @waiting_reason_values [
     "checks_pending",
+    "checks_failed",
     "human_approval_required",
+    "merge_conflict",
     "metadata_recovery_required",
     "missing_context",
     "missing_auth",
@@ -35,7 +37,6 @@ defmodule SymphonyElixir.OrchestrationPolicy do
     "mergeability_changed",
     "rework_limit_exceeded",
     "recovery_limit_exceeded",
-    "checks_failed",
     "kill_switch_active",
     "observe_only"
   ]

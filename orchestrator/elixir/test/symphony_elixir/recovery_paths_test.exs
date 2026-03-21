@@ -138,9 +138,16 @@ defmodule SymphonyElixir.RecoveryPathsTest do
       assert config.recovery.max_attempts == 10
     end
 
-    test "recovery.max_attempts must be a positive integer" do
+    test "recovery.max_attempts must be a positive integer (zero rejected)" do
       assert {:error, {:invalid_workflow_config, message}} =
                Schema.parse(%{recovery: %{max_attempts: 0}})
+
+      assert message =~ "recovery.max_attempts"
+    end
+
+    test "recovery.max_attempts must be a positive integer (negative rejected)" do
+      assert {:error, {:invalid_workflow_config, message}} =
+               Schema.parse(%{recovery: %{max_attempts: -3}})
 
       assert message =~ "recovery.max_attempts"
     end
@@ -543,6 +550,7 @@ defmodule SymphonyElixir.RecoveryPathsTest do
 
         runtime = runtime_for(updated_issue)
         assert runtime.phase == "blocked"
+        assert runtime.waiting_reason == "recovery_limit_exceeded"
 
         observation = runtime.workpad.metadata["observation"]
         assert observation["next_intended_action"] == "operator_intervention_required"
@@ -599,6 +607,7 @@ defmodule SymphonyElixir.RecoveryPathsTest do
 
         runtime = runtime_for(updated_issue)
         assert runtime.phase == "blocked"
+        assert runtime.waiting_reason == "recovery_limit_exceeded"
 
         observation = runtime.workpad.metadata["observation"]
         assert observation["next_intended_action"] == "operator_intervention_required"
@@ -657,8 +666,14 @@ defmodule SymphonyElixir.RecoveryPathsTest do
         assert runtime.phase == "rework"
         assert runtime.dispatch_allowed == true
 
+        # waiting_reason is nil because "rework" is an active (non-passive) phase —
+        # the system clears waiting metadata for phases where a worker is dispatched.
+        # The recovery context is captured in observation gates instead.
         observation = runtime.workpad.metadata["observation"]
         assert observation["next_intended_action"] == "rebase_onto_base_branch"
+
+        gates = observation["gates"]
+        assert gates["mergeability"] == "conflict"
       after
         restore_memory_tracker(previous)
       end
@@ -750,10 +765,421 @@ defmodule SymphonyElixir.RecoveryPathsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # OrchestrationLifecycle: merge conflict recovery via bootstrap
+  # ---------------------------------------------------------------------------
+
+  describe "merge conflict recovery via bootstrap" do
+    test "merge conflict with recovery enabled transitions to rework phase" do
+      previous = save_memory_tracker([])
+
+      write_workflow_file!(Workflow.workflow_file_path(), default_recovery_workflow_opts())
+
+      issue = %Issue{
+        id: "issue-mc-rework",
+        identifier: "MT-MC-RW",
+        state: "In Review",
+        title: "Merge conflict needs remediation",
+        url: "https://example.org/issues/MT-MC-RW",
+        branch_name: "feature/recovery-test",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body: workpad_yaml("waiting_for_checks", pr_number: 420, pr_head_sha: "mc-rw-head"),
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      runner =
+        github_runner([
+          {:ok,
+           open_pr_state(420, "mc-rw-head",
+             mergeable: "CONFLICTING",
+             merge_state_status: "DIRTY"
+           )}
+        ])
+
+      try do
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+        assert {:ok, updated_issue} =
+                 OrchestrationLifecycle.bootstrap_issue_for_test(
+                   issue,
+                   runner: runner,
+                   tracker_module: Memory
+                 )
+
+        runtime = runtime_for(updated_issue)
+        assert runtime.phase == "rework"
+        assert runtime.dispatch_allowed == true
+
+        observation = runtime.workpad.metadata["observation"]
+        assert observation["next_intended_action"] == "rebase_onto_base_branch"
+
+        gates = observation["gates"]
+        assert gates["mergeability"] == "conflict"
+        assert gates["pr"] == "open"
+      after
+        restore_memory_tracker(previous)
+      end
+    end
+
+    test "merge conflict still enters rework when recovery is disabled (conflicts always block merging)" do
+      previous = save_memory_tracker([])
+
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        Keyword.merge(default_recovery_workflow_opts(), recovery_enabled: false)
+      )
+
+      issue = %Issue{
+        id: "issue-mc-no-rec",
+        identifier: "MT-MC-NRC",
+        state: "In Review",
+        title: "Recovery disabled — merge conflict still enters rework",
+        url: "https://example.org/issues/MT-MC-NRC",
+        branch_name: "feature/recovery-test",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body: workpad_yaml("waiting_for_checks", pr_number: 421, pr_head_sha: "mc-no-rec-head"),
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      runner =
+        github_runner([
+          {:ok,
+           open_pr_state(421, "mc-no-rec-head",
+             mergeable: "CONFLICTING",
+             merge_state_status: "DIRTY"
+           )}
+        ])
+
+      try do
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+        assert {:ok, updated_issue} =
+                 OrchestrationLifecycle.bootstrap_issue_for_test(
+                   issue,
+                   runner: runner,
+                   tracker_module: Memory
+                 )
+
+        runtime = runtime_for(updated_issue)
+        # Merge conflicts always enter rework — they block merging regardless of recovery settings.
+        # Recovery.enabled only controls the escalation to "blocked" after max_attempts.
+        assert runtime.phase == "rework"
+
+        observation = runtime.workpad.metadata["observation"]
+        gates = observation["gates"]
+        assert gates["mergeability"] == "conflict"
+      after
+        restore_memory_tracker(previous)
+      end
+    end
+
+    test "merge conflict at limit does NOT block when recovery is disabled (no limit enforcement)" do
+      previous = save_memory_tracker([])
+
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        Keyword.merge(default_recovery_workflow_opts(), recovery_enabled: false)
+      )
+
+      issue = %Issue{
+        id: "issue-mc-no-rec-limit",
+        identifier: "MT-MC-NRL",
+        state: "In Review",
+        title: "Recovery disabled — merge conflict at limit stays rework",
+        url: "https://example.org/issues/MT-MC-NRL",
+        branch_name: "feature/recovery-test",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body:
+              workpad_yaml("waiting_for_checks",
+                pr_number: 422,
+                pr_head_sha: "mc-nrl-head",
+                remediation_attempts: 10
+              ),
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      runner =
+        github_runner([
+          {:ok,
+           open_pr_state(422, "mc-nrl-head",
+             mergeable: "CONFLICTING",
+             merge_state_status: "DIRTY"
+           )}
+        ])
+
+      try do
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+        assert {:ok, updated_issue} =
+                 OrchestrationLifecycle.bootstrap_issue_for_test(
+                   issue,
+                   runner: runner,
+                   tracker_module: Memory
+                 )
+
+        runtime = runtime_for(updated_issue)
+        # When recovery is disabled, merge_conflict_recovery_exhausted? returns false
+        # (requires recovery_enabled?), so the issue stays in rework indefinitely.
+        assert runtime.phase == "rework"
+        refute runtime.phase == "blocked"
+      after
+        restore_memory_tracker(previous)
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # OrchestrationLifecycle: recovery limit boundary conditions
+  # ---------------------------------------------------------------------------
+
+  describe "recovery limit boundary conditions" do
+    test "max_attempts=1: first failure enters rework (attempts=0 < limit=1)" do
+      previous = save_memory_tracker([])
+
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        Keyword.merge(default_recovery_workflow_opts(), recovery_max_attempts: 1)
+      )
+
+      issue = %Issue{
+        id: "issue-boundary-first",
+        identifier: "MT-BOUND-1ST",
+        state: "In Review",
+        title: "First failure with max_attempts=1",
+        url: "https://example.org/issues/MT-BOUND-1ST",
+        branch_name: "feature/recovery-test",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body:
+              workpad_yaml("waiting_for_checks",
+                pr_number: 430,
+                pr_head_sha: "bound-first-head",
+                remediation_attempts: 0
+              ),
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      runner =
+        github_runner([
+          {:ok,
+           open_pr_state(430, "bound-first-head",
+             checks_conclusion: "FAILURE",
+             checks_status: "COMPLETED"
+           )}
+        ])
+
+      try do
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+        assert {:ok, updated_issue} =
+                 OrchestrationLifecycle.bootstrap_issue_for_test(
+                   issue,
+                   runner: runner,
+                   tracker_module: Memory
+                 )
+
+        runtime = runtime_for(updated_issue)
+        assert runtime.phase == "rework"
+        assert runtime.dispatch_allowed == true
+      after
+        restore_memory_tracker(previous)
+      end
+    end
+
+    test "max_attempts=1: second failure blocks (attempts=1 >= limit=1)" do
+      previous = save_memory_tracker([])
+
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        Keyword.merge(default_recovery_workflow_opts(), recovery_max_attempts: 1)
+      )
+
+      issue = %Issue{
+        id: "issue-boundary-second",
+        identifier: "MT-BOUND-2ND",
+        state: "In Review",
+        title: "Second failure with max_attempts=1",
+        url: "https://example.org/issues/MT-BOUND-2ND",
+        branch_name: "feature/recovery-test",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body:
+              workpad_yaml("waiting_for_checks",
+                pr_number: 431,
+                pr_head_sha: "bound-second-head",
+                remediation_attempts: 1
+              ),
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      runner =
+        github_runner([
+          {:ok,
+           open_pr_state(431, "bound-second-head",
+             checks_conclusion: "FAILURE",
+             checks_status: "COMPLETED"
+           )}
+        ])
+
+      try do
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+        assert {:ok, updated_issue} =
+                 OrchestrationLifecycle.bootstrap_issue_for_test(
+                   issue,
+                   runner: runner,
+                   tracker_module: Memory
+                 )
+
+        runtime = runtime_for(updated_issue)
+        assert runtime.phase == "blocked"
+
+        observation = runtime.workpad.metadata["observation"]
+        assert observation["next_intended_action"] == "operator_intervention_required"
+      after
+        restore_memory_tracker(previous)
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # OrchestrationLifecycle: recovery only in mutate/merge rollout modes
   # ---------------------------------------------------------------------------
 
   describe "recovery rollout mode guards" do
+    test "CI failure recovery works in merge rollout mode" do
+      previous = save_memory_tracker([])
+
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        Keyword.merge(default_recovery_workflow_opts(), rollout_mode: "merge")
+      )
+
+      issue = %Issue{
+        id: "issue-ci-merge-mode",
+        identifier: "MT-CI-MRG",
+        state: "In Review",
+        title: "Merge mode — CI recovery enabled",
+        url: "https://example.org/issues/MT-CI-MRG",
+        branch_name: "feature/recovery-test",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body: workpad_yaml("waiting_for_checks", pr_number: 440, pr_head_sha: "mrg-head"),
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      runner =
+        github_runner([
+          {:ok,
+           open_pr_state(440, "mrg-head",
+             checks_conclusion: "FAILURE",
+             checks_status: "COMPLETED"
+           )}
+        ])
+
+      try do
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+        assert {:ok, updated_issue} =
+                 OrchestrationLifecycle.bootstrap_issue_for_test(
+                   issue,
+                   runner: runner,
+                   tracker_module: Memory
+                 )
+
+        runtime = runtime_for(updated_issue)
+        # In merge mode, recovery_enabled? returns true, so CI failures enter rework
+        assert runtime.phase == "rework"
+      after
+        restore_memory_tracker(previous)
+      end
+    end
+
+    test "merge conflict in observe mode still enters rework but dispatch is blocked" do
+      previous = save_memory_tracker([])
+
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        Keyword.merge(default_recovery_workflow_opts(), rollout_mode: "observe")
+      )
+
+      issue = %Issue{
+        id: "issue-mc-observe",
+        identifier: "MT-MC-OBS",
+        state: "In Review",
+        title: "Observe mode — merge conflict enters rework, dispatch blocked",
+        url: "https://example.org/issues/MT-MC-OBS",
+        branch_name: "feature/recovery-test",
+        labels: ["symphony"],
+        comments: [
+          %{
+            id: "comment-1",
+            body:
+              workpad_yaml("waiting_for_checks",
+                pr_number: 441,
+                pr_head_sha: "mc-obs-head"
+              ),
+            updated_at: DateTime.utc_now()
+          }
+        ]
+      }
+
+      runner =
+        github_runner([
+          {:ok,
+           open_pr_state(441, "mc-obs-head",
+             mergeable: "CONFLICTING",
+             merge_state_status: "DIRTY"
+           )}
+        ])
+
+      try do
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+        assert {:ok, updated_issue} =
+                 OrchestrationLifecycle.bootstrap_issue_for_test(
+                   issue,
+                   runner: runner,
+                   tracker_module: Memory
+                 )
+
+        runtime = runtime_for(updated_issue)
+        # Merge conflicts always enter rework (they block merging).
+        # In observe mode, dispatch is blocked so no worker is spawned,
+        # but the phase still reflects the conflict.
+        assert runtime.phase == "rework"
+        assert runtime.dispatch_allowed == false
+      after
+        restore_memory_tracker(previous)
+      end
+    end
+
     test "CI failure recovery does NOT trigger in observe mode" do
       previous = save_memory_tracker([])
 
