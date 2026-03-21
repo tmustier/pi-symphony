@@ -224,12 +224,57 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule ModelRouteMatch do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:labels, {:array, :string}, default: [])
+      field(:priority, {:array, :integer}, default: [])
+      field(:state, {:array, :string}, default: [])
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:labels, :priority, :state], empty_values: [])
+    end
+  end
+
+  defmodule ModelRoute do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema.{ModelRouteMatch, PiModel}
+
+    @primary_key false
+    embedded_schema do
+      embeds_one(:match, ModelRouteMatch, on_replace: :update, defaults_to_struct: true)
+      embeds_one(:model, PiModel, on_replace: :update)
+      field(:thinking_level, :string)
+    end
+
+    @thinking_levels ["off", "minimal", "low", "medium", "high", "xhigh"]
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:thinking_level], empty_values: [])
+      |> cast_embed(:match, with: &ModelRouteMatch.changeset/2)
+      |> cast_embed(:model, with: &PiModel.changeset/2)
+      |> validate_inclusion(:thinking_level, @thinking_levels)
+    end
+  end
+
   defmodule Pi do
     @moduledoc false
     use Ecto.Schema
     import Ecto.Changeset
 
-    alias SymphonyElixir.Config.Schema.PiModel
+    alias SymphonyElixir.Config.Schema.{ModelRoute, PiModel}
 
     @primary_key false
     embedded_schema do
@@ -241,6 +286,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:disable_themes, :boolean, default: true)
       field(:thinking_level, :string)
       embeds_one(:model, PiModel, on_replace: :update)
+      embeds_many(:model_routing, ModelRoute, on_replace: :delete)
     end
 
     @thinking_levels ["off", "minimal", "low", "medium", "high", "xhigh"]
@@ -262,6 +308,7 @@ defmodule SymphonyElixir.Config.Schema do
         empty_values: []
       )
       |> cast_embed(:model, with: &PiModel.changeset/2)
+      |> cast_embed(:model_routing, with: &ModelRoute.changeset/2)
       |> validate_required([:command, :session_dir_name])
       |> validate_number(:response_timeout_ms, greater_than: 0)
       |> validate_inclusion(:thinking_level, @thinking_levels)
@@ -690,7 +737,8 @@ defmodule SymphonyElixir.Config.Schema do
       | session_dir_name: normalize_pi_session_dir_name(settings.pi.session_dir_name),
         extension_paths: normalize_pi_extension_paths(settings.pi.extension_paths),
         thinking_level: normalize_pi_thinking_level(settings.pi.thinking_level),
-        model: normalize_pi_model(settings.pi.model)
+        model: normalize_pi_model(settings.pi.model),
+        model_routing: normalize_model_routing(settings.pi.model_routing)
     }
 
     orchestration = %{
@@ -842,6 +890,119 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp normalize_pi_model(_model), do: nil
+
+  defp normalize_model_routing(routes) when is_list(routes) do
+    routes
+    |> Enum.map(&normalize_model_route/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_model_routing(_routes), do: []
+
+  defp normalize_model_route(%ModelRoute{} = route) do
+    match = normalize_model_route_match(route.match)
+
+    if model_route_match_empty?(match) do
+      nil
+    else
+      %{route | match: match, model: normalize_pi_model(route.model), thinking_level: normalize_pi_thinking_level(route.thinking_level)}
+    end
+  end
+
+  defp normalize_model_route(_route), do: nil
+
+  defp normalize_model_route_match(%ModelRouteMatch{} = match) do
+    %{
+      match
+      | labels: normalize_lowercase_string_list(match.labels),
+        priority: normalize_integer_list(match.priority),
+        state: normalize_lowercase_string_list(match.state)
+    }
+  end
+
+  defp normalize_model_route_match(_match), do: %ModelRouteMatch{}
+
+  defp model_route_match_empty?(%ModelRouteMatch{labels: [], priority: [], state: []}), do: true
+  defp model_route_match_empty?(_match), do: false
+
+  defp normalize_lowercase_string_list(values) when is_list(values) do
+    values
+    |> Enum.map(&normalize_optional_string/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_lowercase_string_list(_values), do: []
+
+  defp normalize_integer_list(values) when is_list(values) do
+    values
+    |> Enum.filter(&is_integer/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_integer_list(_values), do: []
+
+  @doc """
+  Resolve the Pi model and thinking level for a given issue based on model routing rules.
+
+  Returns `{resolved_model, resolved_thinking_level}` where either may be `nil`
+  if no override applies (in which case the caller should use the default).
+  """
+  @spec resolve_model_for_issue(%__MODULE__{}, map()) :: {PiModel.t() | nil, String.t() | nil}
+  def resolve_model_for_issue(%__MODULE__{pi: pi}, issue) when is_map(issue) do
+    case find_matching_route(pi.model_routing, issue) do
+      nil ->
+        {pi.model, pi.thinking_level}
+
+      %ModelRoute{} = route ->
+        {route.model || pi.model, route.thinking_level || pi.thinking_level}
+    end
+  end
+
+  defp find_matching_route([], _issue), do: nil
+
+  defp find_matching_route([route | rest], issue) do
+    if model_route_matches?(route.match, issue) do
+      route
+    else
+      find_matching_route(rest, issue)
+    end
+  end
+
+  defp model_route_matches?(%ModelRouteMatch{} = match, issue) do
+    labels_match?(match.labels, issue) and
+      priority_match?(match.priority, issue) and
+      state_match?(match.state, issue)
+  end
+
+  defp labels_match?([], _issue), do: true
+
+  defp labels_match?(match_labels, issue) do
+    issue_labels =
+      case Map.get(issue, :labels, Map.get(issue, "labels", [])) do
+        labels when is_list(labels) -> Enum.map(labels, &String.downcase(to_string(&1)))
+        _ -> []
+      end
+
+    Enum.any?(match_labels, &(&1 in issue_labels))
+  end
+
+  defp priority_match?([], _issue), do: true
+
+  defp priority_match?(match_priorities, issue) do
+    issue_priority = Map.get(issue, :priority, Map.get(issue, "priority"))
+
+    is_integer(issue_priority) and issue_priority in match_priorities
+  end
+
+  defp state_match?([], _issue), do: true
+
+  defp state_match?(match_states, issue) do
+    issue_state = Map.get(issue, :state, Map.get(issue, "state"))
+
+    is_binary(issue_state) and String.downcase(issue_state) in match_states
+  end
 
   defp normalize_pi_thinking_level(value) when is_binary(value), do: normalize_optional_string(value)
   defp normalize_pi_thinking_level(_value), do: nil

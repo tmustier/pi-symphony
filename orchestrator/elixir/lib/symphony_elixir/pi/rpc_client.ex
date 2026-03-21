@@ -66,19 +66,24 @@ defmodule SymphonyElixir.Pi.RpcClient do
   end
 
   @spec configure_turn(session(), map()) :: :ok | {:error, term()}
-  def configure_turn(%{port: port, response_timeout_ms: timeout_ms}, %{name: session_name}) when is_binary(session_name) do
+  def configure_turn(%{port: port, response_timeout_ms: timeout_ms}, %{name: session_name} = turn_config) when is_binary(session_name) do
     with {:ok, _} <- request_response(port, @set_session_name_id, %{"type" => "set_session_name", "name" => session_name}, timeout_ms),
          {:ok, _} <- request_response(port, @set_auto_retry_id, %{"type" => "set_auto_retry", "enabled" => false}, timeout_ms),
          {:ok, _} <- request_response(port, @set_auto_compaction_id, %{"type" => "set_auto_compaction", "enabled" => false}, timeout_ms) do
-      case maybe_set_model(port, timeout_ms) do
-        :ok -> maybe_set_thinking_level(port, timeout_ms)
+      resolved_model = Map.get(turn_config, :model)
+      resolved_thinking = Map.get(turn_config, :thinking_level)
+
+      case maybe_set_model(port, timeout_ms, resolved_model) do
+        :ok -> maybe_set_thinking_level(port, timeout_ms, resolved_thinking)
         {:error, reason} -> {:error, reason}
       end
     end
   end
 
-  defp maybe_set_model(port, timeout_ms) do
-    case Config.settings!().pi.model do
+  defp maybe_set_model(port, timeout_ms, override_model) do
+    model = override_model || Config.settings!().pi.model
+
+    case model do
       %{provider: provider, model_id: model_id}
       when is_binary(provider) and is_binary(model_id) ->
         case request_response(
@@ -96,13 +101,15 @@ defmodule SymphonyElixir.Pi.RpcClient do
     end
   end
 
-  defp maybe_set_thinking_level(port, timeout_ms) do
-    case Config.settings!().pi.thinking_level do
-      thinking_level when is_binary(thinking_level) ->
+  defp maybe_set_thinking_level(port, timeout_ms, override_thinking) do
+    thinking_level = override_thinking || Config.settings!().pi.thinking_level
+
+    case thinking_level do
+      level when is_binary(level) ->
         case request_response(
                port,
                @set_thinking_level_id,
-               %{"type" => "set_thinking_level", "level" => thinking_level},
+               %{"type" => "set_thinking_level", "level" => level},
                timeout_ms
              ) do
           {:ok, _} -> :ok
