@@ -1,8 +1,10 @@
 defmodule Mix.Tasks.Workspace.CleanupTest do
   use SymphonyElixir.TestSupport
 
+  alias Mix.Tasks.Workspace.Cleanup, as: CleanupTask
+
   test "mix workspace.cleanup --help prints usage" do
-    output = ExUnit.CaptureIO.capture_io(fn -> Mix.Tasks.Workspace.Cleanup.run(["--help"]) end)
+    output = ExUnit.CaptureIO.capture_io(fn -> CleanupTask.run(["--help"]) end)
     assert output =~ "Removes workspace directories"
     assert output =~ "--dry-run"
     assert output =~ "--retention-hours"
@@ -22,7 +24,7 @@ defmodule Mix.Tasks.Workspace.CleanupTest do
 
       output =
         ExUnit.CaptureIO.capture_io(fn ->
-          Mix.Tasks.Workspace.Cleanup.run(["--dry-run", "--json", "--all"])
+          CleanupTask.run(["--dry-run", "--json", "--all"])
         end)
 
       assert {:ok, payload} = Jason.decode(output)
@@ -52,7 +54,7 @@ defmodule Mix.Tasks.Workspace.CleanupTest do
 
       _output =
         ExUnit.CaptureIO.capture_io(fn ->
-          Mix.Tasks.Workspace.Cleanup.run(["--all"])
+          CleanupTask.run(["--all"])
         end)
 
       refute File.exists?(Path.join(workspace_root, "WS-1"))

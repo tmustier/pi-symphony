@@ -51,3 +51,4 @@ status.txt
 
 # Ignore package tarball (built via "mix hex.build").
 symphony_elixir-*.tar
+pi-analytics/
