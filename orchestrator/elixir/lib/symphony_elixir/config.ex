@@ -207,10 +207,22 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @doc """
+  Resolve the Pi model and thinking level for a given issue, applying model
+  routing rules from WORKFLOW.md.
+
+  Returns `{resolved_model, resolved_thinking_level}`.
+  """
+  @spec resolve_pi_model_for_issue(map()) :: {Schema.PiModel.t() | nil, String.t() | nil}
+  def resolve_pi_model_for_issue(issue) when is_map(issue) do
+    Schema.resolve_model_for_issue(settings!(), issue)
+  end
+
   defp validate_semantics(settings) do
     with :ok <- validate_tracker_kind(settings),
          :ok <- validate_linear_requirements(settings),
          :ok <- validate_worker_runtime_semantics(settings),
+         :ok <- validate_model_routing_semantics(settings),
          :ok <- validate_orchestration_semantics(settings),
          :ok <- validate_rollout_semantics(settings),
          :ok <- validate_pr_semantics(settings),
@@ -256,6 +268,30 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_worker_runtime_semantics(_settings), do: :ok
+
+  defp validate_model_routing_semantics(%{pi: %{model_routing: routes}}) when is_list(routes) do
+    case Enum.find_value(routes, &model_route_validation_error/1) do
+      nil -> :ok
+      error -> error
+    end
+  end
+
+  defp validate_model_routing_semantics(_settings), do: :ok
+
+  defp model_route_validation_error(%{match: match} = route) do
+    cond do
+      is_nil(match) ->
+        {:error, {:invalid_workflow_config, "pi.model_routing entries must have a match clause"}}
+
+      is_nil(route.model) and is_nil(route.thinking_level) ->
+        {:error, {:invalid_workflow_config, "pi.model_routing entries must override at least model or thinking_level"}}
+
+      true ->
+        nil
+    end
+  end
+
+  defp model_route_validation_error(_route), do: nil
 
   defp validate_orchestration_semantics(settings) do
     orchestration = settings.orchestration

@@ -46,6 +46,20 @@ pi:
     - ../extensions/linear-graphql/index.ts
   disable_extensions: true
   disable_themes: true
+  # Per-issue model routing (optional). First matching rule wins.
+  # model_routing:
+  #   - match:
+  #       labels: [simple, formatting]
+  #     model:
+  #       provider: anthropic
+  #       model_id: claude-sonnet-4-6
+  #     thinking_level: high
+  #   - match:
+  #       priority: [1, 2]
+  #     model:
+  #       provider: anthropic
+  #       model_id: claude-opus-4-6
+  #     thinking_level: xhigh
 orchestration:
   phase_store: workpad
   default_phase: implementing

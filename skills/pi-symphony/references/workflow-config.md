@@ -54,6 +54,52 @@ Worker process configuration.
 | `extension_paths` | `[]` | Paths to worker extensions, resolved relative to WORKFLOW.md. |
 | `disable_extensions` | `true` | Disable ambient extension discovery in workers. Recommended. |
 | `disable_themes` | `true` | Disable ambient theme discovery in workers. |
+| `model_routing` | `[]` | Per-issue model routing rules. See **Model Routing** below. |
+
+### Model Routing
+
+Route different issues to different models based on issue metadata. Each rule has a `match` clause and overrides for `model` and/or `thinking_level`. First matching rule wins; unmatched issues use the default `pi.model`.
+
+```yaml
+pi:
+  model:
+    provider: anthropic
+    model_id: claude-sonnet-4-6
+  thinking_level: high
+  model_routing:
+    - match:
+        labels: [complex, architecture]
+      model:
+        provider: anthropic
+        model_id: claude-opus-4-6
+      thinking_level: xhigh
+    - match:
+        priority: [1, 2]
+      model:
+        provider: anthropic
+        model_id: claude-opus-4-6
+    - match:
+        state: [Rework]
+      thinking_level: xhigh
+```
+
+**Match conditions** (all conditions within a rule are AND'd):
+
+| Field | Type | Description |
+|---|---|---|
+| `labels` | `string[]` | Issue has at least one of these labels (OR within labels). Case-insensitive. |
+| `priority` | `integer[]` | Issue priority is one of these values (1=urgent, 4=low). |
+| `state` | `string[]` | Issue Linear state matches one of these. Case-insensitive. |
+
+**Override fields** (at least one required per route):
+
+| Field | Description |
+|---|---|
+| `model.provider` | Override model provider. |
+| `model.model_id` | Override model ID. |
+| `thinking_level` | Override thinking level. |
+
+Routes with empty match conditions are ignored. If a route specifies only `thinking_level`, the default `pi.model` is preserved.
 
 ## orchestration
 

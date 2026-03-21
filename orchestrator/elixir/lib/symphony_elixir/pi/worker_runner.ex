@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
 
   require Logger
 
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Pi.{EventMapper, RpcClient}
 
   @heartbeat_interval_ms 30_000
@@ -23,7 +24,11 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
     turn_number = Keyword.get(opts, :turn_number, 1)
     turn_session_id = turn_session_id(session.base_session_id, turn_number)
 
-    with :ok <- RpcClient.configure_turn(session, %{name: session_name(issue)}),
+    {resolved_model, resolved_thinking} = Config.resolve_pi_model_for_issue(issue)
+
+    turn_config = %{name: session_name(issue), model: resolved_model, thinking_level: resolved_thinking}
+
+    with :ok <- RpcClient.configure_turn(session, turn_config),
          {:ok, _prompt_id} <- RpcClient.start_prompt(session, prompt) do
       emit(on_message, EventMapper.session_started(turn_session_id, session.metadata))
       await_turn_completion(session, turn_session_id, on_message, issue)

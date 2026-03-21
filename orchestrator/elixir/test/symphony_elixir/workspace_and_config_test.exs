@@ -1829,4 +1829,401 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert message =~ "worker.runtime"
     assert message =~ "worker.ssh_hosts"
   end
+
+  test "model routing resolves first matching route by labels" do
+    workflow = """
+    ---
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      thinking_level: high
+      model_routing:
+        - match:
+            labels: [complex, architecture]
+          model:
+            provider: anthropic
+            model_id: claude-opus-4-6
+          thinking_level: xhigh
+        - match:
+            labels: [simple]
+          model:
+            provider: anthropic
+            model_id: claude-haiku-4-5
+          thinking_level: medium
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+
+    settings = Config.settings!()
+
+    complex_issue = %Issue{
+      id: "route-1",
+      identifier: "MT-R1",
+      title: "Complex task",
+      state: "Todo",
+      labels: ["complex", "backend"]
+    }
+
+    {model, thinking} = Schema.resolve_model_for_issue(settings, complex_issue)
+    assert model.provider == "anthropic"
+    assert model.model_id == "claude-opus-4-6"
+    assert thinking == "xhigh"
+
+    simple_issue = %Issue{
+      id: "route-2",
+      identifier: "MT-R2",
+      title: "Simple task",
+      state: "Todo",
+      labels: ["simple"]
+    }
+
+    {model, thinking} = Schema.resolve_model_for_issue(settings, simple_issue)
+    assert model.provider == "anthropic"
+    assert model.model_id == "claude-haiku-4-5"
+    assert thinking == "medium"
+
+    unmatched_issue = %Issue{
+      id: "route-3",
+      identifier: "MT-R3",
+      title: "Normal task",
+      state: "Todo",
+      labels: ["backend"]
+    }
+
+    {model, thinking} = Schema.resolve_model_for_issue(settings, unmatched_issue)
+    assert model.provider == "anthropic"
+    assert model.model_id == "claude-sonnet-4-6"
+    assert thinking == "high"
+  end
+
+  test "model routing resolves by priority" do
+    workflow = """
+    ---
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      thinking_level: high
+      model_routing:
+        - match:
+            priority: [1, 2]
+          model:
+            provider: anthropic
+            model_id: claude-opus-4-6
+          thinking_level: xhigh
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+
+    settings = Config.settings!()
+
+    urgent_issue = %Issue{
+      id: "prio-1",
+      identifier: "MT-P1",
+      title: "Urgent task",
+      state: "Todo",
+      priority: 1
+    }
+
+    {model, thinking} = Schema.resolve_model_for_issue(settings, urgent_issue)
+    assert model.model_id == "claude-opus-4-6"
+    assert thinking == "xhigh"
+
+    low_prio_issue = %Issue{
+      id: "prio-2",
+      identifier: "MT-P2",
+      title: "Low priority task",
+      state: "Todo",
+      priority: 4
+    }
+
+    {model, thinking} = Schema.resolve_model_for_issue(settings, low_prio_issue)
+    assert model.model_id == "claude-sonnet-4-6"
+    assert thinking == "high"
+  end
+
+  test "model routing resolves by state" do
+    workflow = """
+    ---
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      thinking_level: high
+      model_routing:
+        - match:
+            state: [Rework]
+          model:
+            provider: anthropic
+            model_id: claude-opus-4-6
+          thinking_level: xhigh
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+
+    settings = Config.settings!()
+
+    rework_issue = %Issue{
+      id: "state-1",
+      identifier: "MT-S1",
+      title: "Rework task",
+      state: "Rework"
+    }
+
+    {model, _thinking} = Schema.resolve_model_for_issue(settings, rework_issue)
+    assert model.model_id == "claude-opus-4-6"
+
+    todo_issue = %Issue{
+      id: "state-2",
+      identifier: "MT-S2",
+      title: "Todo task",
+      state: "Todo"
+    }
+
+    {model, _thinking} = Schema.resolve_model_for_issue(settings, todo_issue)
+    assert model.model_id == "claude-sonnet-4-6"
+  end
+
+  test "model routing AND-combines match conditions" do
+    workflow = """
+    ---
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      thinking_level: high
+      model_routing:
+        - match:
+            labels: [complex]
+            priority: [1]
+          model:
+            provider: anthropic
+            model_id: claude-opus-4-6
+          thinking_level: xhigh
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+
+    settings = Config.settings!()
+
+    # Both conditions match
+    both_match = %Issue{
+      id: "and-1",
+      identifier: "MT-A1",
+      title: "Complex urgent",
+      state: "Todo",
+      labels: ["complex"],
+      priority: 1
+    }
+
+    {model, _thinking} = Schema.resolve_model_for_issue(settings, both_match)
+    assert model.model_id == "claude-opus-4-6"
+
+    # Only label matches — should fall through
+    only_label = %Issue{
+      id: "and-2",
+      identifier: "MT-A2",
+      title: "Complex low-prio",
+      state: "Todo",
+      labels: ["complex"],
+      priority: 4
+    }
+
+    {model, _thinking} = Schema.resolve_model_for_issue(settings, only_label)
+    assert model.model_id == "claude-sonnet-4-6"
+  end
+
+  test "model routing falls back to default when only thinking_level is overridden" do
+    workflow = """
+    ---
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      thinking_level: high
+      model_routing:
+        - match:
+            labels: [deep-think]
+          thinking_level: xhigh
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+
+    settings = Config.settings!()
+
+    issue = %Issue{
+      id: "think-1",
+      identifier: "MT-T1",
+      title: "Deep thinking",
+      state: "Todo",
+      labels: ["deep-think"]
+    }
+
+    {model, thinking} = Schema.resolve_model_for_issue(settings, issue)
+    # Model falls back to default
+    assert model.provider == "anthropic"
+    assert model.model_id == "claude-sonnet-4-6"
+    # Thinking level is overridden
+    assert thinking == "xhigh"
+  end
+
+  test "model routing case-insensitive label matching" do
+    workflow = """
+    ---
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      model_routing:
+        - match:
+            labels: [COMPLEX]
+          model:
+            provider: anthropic
+            model_id: claude-opus-4-6
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+
+    settings = Config.settings!()
+
+    issue = %Issue{
+      id: "case-1",
+      identifier: "MT-C1",
+      title: "Case test",
+      state: "Todo",
+      labels: ["complex"]
+    }
+
+    {model, _thinking} = Schema.resolve_model_for_issue(settings, issue)
+    assert model.model_id == "claude-opus-4-6"
+  end
+
+  test "model routing skips routes with empty match conditions" do
+    workflow = """
+    ---
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      model_routing:
+        - match:
+            labels: []
+          model:
+            provider: anthropic
+            model_id: claude-opus-4-6
+        - match:
+            labels: [real-match]
+          model:
+            provider: anthropic
+            model_id: claude-haiku-4-5
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+
+    settings = Config.settings!()
+    # Empty-match route is pruned during normalization
+    assert length(settings.pi.model_routing) == 1
+
+    issue = %Issue{
+      id: "empty-1",
+      identifier: "MT-E1",
+      title: "Empty match test",
+      state: "Todo",
+      labels: ["real-match"]
+    }
+
+    {model, _thinking} = Schema.resolve_model_for_issue(settings, issue)
+    assert model.model_id == "claude-haiku-4-5"
+  end
+
+  test "model routing validates routes must override model or thinking_level" do
+    # Write a valid base workflow, then overwrite with model_routing that lacks overrides
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    workflow = """
+    ---
+    tracker:
+      kind: linear
+      api_key: "token"
+      team_key: "THO"
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      model_routing:
+        - match:
+            labels: [something]
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+    if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "model_routing"
+    assert message =~ "model or thinking_level"
+  end
+
+  test "model routing works with no routes configured" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      pi_model_provider: "anthropic",
+      pi_model_id: "claude-sonnet-4-6",
+      pi_thinking_level: "high"
+    )
+
+    settings = Config.settings!()
+    assert settings.pi.model_routing == []
+
+    issue = %Issue{
+      id: "no-routes-1",
+      identifier: "MT-N1",
+      title: "No routes",
+      state: "Todo"
+    }
+
+    {model, thinking} = Schema.resolve_model_for_issue(settings, issue)
+    assert model.provider == "anthropic"
+    assert model.model_id == "claude-sonnet-4-6"
+    assert thinking == "high"
+  end
+
+  test "Config.resolve_pi_model_for_issue delegates to Schema" do
+    workflow = """
+    ---
+    pi:
+      model:
+        provider: anthropic
+        model_id: claude-sonnet-4-6
+      thinking_level: high
+      model_routing:
+        - match:
+            labels: [special]
+          model:
+            provider: anthropic
+            model_id: claude-opus-4-6
+    ---
+    """
+
+    File.write!(Workflow.workflow_file_path(), workflow)
+
+    issue = %Issue{
+      id: "delegate-1",
+      identifier: "MT-D1",
+      title: "Delegate test",
+      state: "Todo",
+      labels: ["special"]
+    }
+
+    {model, thinking} = Config.resolve_pi_model_for_issue(issue)
+    assert model.model_id == "claude-opus-4-6"
+    assert thinking == "high"
+  end
 end
