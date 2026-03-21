@@ -110,18 +110,51 @@ defmodule Mix.Tasks.Symphony.Preflight do
 
         deprecation_warning = Map.get(@deprecated_models, model_id)
 
-        if deprecation_warning do
-          [
-            {:warn, "Model", "#{detail} — #{deprecation_warning}"}
-          ]
+        results =
+          if deprecation_warning do
+            [{:warn, "Model", "#{detail} — #{deprecation_warning}"}]
+          else
+            [{:pass, "Model", detail}]
+          end
+
+        if settings.worker.runtime == "pi" do
+          results ++ [validate_model_availability(settings.pi.command, model_display)]
         else
-          [
-            {:pass, "Model", detail}
-          ]
+          results
         end
 
       _ ->
         {:warn, "Model", "no model configured in pi.model — worker will use its default"}
+    end
+  end
+
+  defp validate_model_availability(pi_command, model_display) do
+    command = pi_command || "pi"
+
+    case System.find_executable(command) do
+      nil ->
+        {:warn, "Model availability", "cannot validate — #{command} not found in PATH"}
+
+      _path ->
+        validate_model_in_list(command, model_display)
+    end
+  end
+
+  defp validate_model_in_list(command, model_display) do
+    case System.cmd(command, ["--list-models"], stderr_to_stdout: true) do
+      {output, 0} ->
+        validate_model_in_output(output, command, model_display)
+
+      {output, _code} ->
+        {:warn, "Model availability", "cannot validate — `#{command} --list-models` failed: #{String.trim(output) |> String.slice(0, 120)}"}
+    end
+  end
+
+  defp validate_model_in_output(output, command, model_display) do
+    if String.contains?(output, model_display) do
+      {:pass, "Model availability", "#{model_display} found in `#{command} --list-models`"}
+    else
+      {:fail, "Model availability", "#{model_display} not found in `#{command} --list-models` output — this will cause permanent failures; check pi.model in WORKFLOW.md"}
     end
   end
 

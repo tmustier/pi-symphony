@@ -27,6 +27,7 @@ agent:
   max_concurrent_agents: 4
   max_turns: 8
   max_retry_backoff_ms: 300000
+  max_retries: 10
 codex:
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000

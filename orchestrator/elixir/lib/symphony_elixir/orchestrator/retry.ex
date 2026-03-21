@@ -4,24 +4,101 @@ defmodule SymphonyElixir.Orchestrator.Retry do
 
   Extracted from the monolithic Orchestrator GenServer to isolate retry logic
   and make it more testable and maintainable.
+
+  ## Error classification integration
+
+  When scheduling a retry, the caller can include an `error_classification` map
+  in the metadata. The retry module checks both permanent error classification
+  and the hard retry cap (`agent.max_retries`) before scheduling.
+
+  - Permanent errors → no retry scheduled, returns state unchanged
+  - Max retries exceeded → no retry scheduled, returns state unchanged
+  - Transient within limit → normal retry with exponential backoff
   """
 
   import Bitwise, only: [<<<: 2]
 
   alias SymphonyElixir.Config
-  alias SymphonyElixir.Orchestrator.State
+  alias SymphonyElixir.Orchestrator.{ErrorClassifier, State}
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
 
+  @spec max_retries_exceeded?(non_neg_integer()) :: boolean()
+  @doc """
+  Returns true if the attempt count exceeds the configured max retries.
+  """
+  def max_retries_exceeded?(attempt) when is_integer(attempt) and attempt > 0 do
+    attempt > Config.settings!().agent.max_retries
+  end
+
+  def max_retries_exceeded?(_attempt), do: false
+
   @spec schedule_issue_retry(State.t(), String.t(), integer() | nil, map()) :: State.t()
   @doc """
   Schedule a retry attempt for an issue.
+
+  Returns the state unchanged (no retry scheduled) when:
+  - The error is classified as permanent
+  - The max retries limit has been exceeded
+
+  In both cases, a warning is logged with structured context for observability.
   """
   def schedule_issue_retry(%State{} = state, issue_id, attempt, metadata)
       when is_binary(issue_id) and is_map(metadata) do
     previous_retry = Map.get(state.retry_attempts, issue_id, %{attempt: 0})
     next_attempt = if is_integer(attempt), do: attempt, else: previous_retry.attempt + 1
+    identifier = pick_retry_identifier(issue_id, previous_retry, metadata)
+
+    case check_retry_eligibility(next_attempt, metadata) do
+      :eligible ->
+        do_schedule_retry(state, issue_id, next_attempt, metadata, previous_retry)
+
+      {:blocked, reason, classified_error} ->
+        require Logger
+
+        Logger.warning(
+          "Retry blocked for issue_id=#{issue_id} issue_identifier=#{identifier}" <>
+            " reason=#{reason}" <>
+            " category=#{classified_error.category}" <>
+            " classification=#{classified_error.classification}" <>
+            " recovery_hint=#{classified_error.recovery_hint || "none"}" <>
+            " attempt=#{next_attempt}"
+        )
+
+        state
+    end
+  end
+
+  @spec check_retry_eligibility(pos_integer(), map()) ::
+          :eligible | {:blocked, String.t(), ErrorClassifier.classified_error()}
+  defp check_retry_eligibility(attempt, metadata) do
+    error = metadata[:error]
+    classified = if error, do: ErrorClassifier.classify(error), else: nil
+
+    cond do
+      not is_nil(classified) and classified.classification == :permanent ->
+        {:blocked, "permanent_error", classified}
+
+      max_retries_exceeded?(attempt) ->
+        category = if classified, do: classified.category, else: "unknown"
+
+        {:blocked, "max_retries_exceeded",
+         %{
+           classification: :transient,
+           category: category,
+           message: "Max retries (#{Config.settings!().agent.max_retries}) exceeded at attempt #{attempt}",
+           retryable: false,
+           recovery_hint: "Increase agent.max_retries in WORKFLOW.md or investigate the underlying error"
+         }}
+
+      true ->
+        :eligible
+    end
+  end
+
+  @spec do_schedule_retry(State.t(), String.t(), pos_integer(), map(), map()) :: State.t()
+  defp do_schedule_retry(%State{} = state, issue_id, next_attempt, metadata, previous_retry) do
     delay_ms = retry_delay(next_attempt, metadata)
     old_timer = Map.get(previous_retry, :timer_ref)
     retry_token = make_ref()
@@ -46,6 +123,9 @@ defmodule SymphonyElixir.Orchestrator.Retry do
     require Logger
     Logger.warning("Retrying issue_id=#{issue_id} issue_identifier=#{identifier} in #{delay_ms}ms (attempt #{next_attempt})#{error_suffix}")
 
+    error_classification =
+      if is_binary(error), do: ErrorClassifier.classify(error), else: nil
+
     %{
       state
       | retry_attempts:
@@ -56,6 +136,7 @@ defmodule SymphonyElixir.Orchestrator.Retry do
             due_at_ms: due_at_ms,
             identifier: identifier,
             error: error,
+            error_classification: error_classification,
             worker_host: worker_host,
             workspace_path: workspace_path,
             session_file: session_file,
@@ -78,6 +159,7 @@ defmodule SymphonyElixir.Orchestrator.Retry do
         metadata = %{
           identifier: Map.get(retry_entry, :identifier),
           error: Map.get(retry_entry, :error),
+          error_classification: Map.get(retry_entry, :error_classification),
           worker_host: Map.get(retry_entry, :worker_host),
           workspace_path: Map.get(retry_entry, :workspace_path),
           session_file: Map.get(retry_entry, :session_file),

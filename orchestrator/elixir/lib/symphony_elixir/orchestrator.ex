@@ -1386,15 +1386,19 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end)
 
+    max_retries = Config.settings!().agent.max_retries
+
     retrying =
       state.retry_attempts
       |> Enum.map(fn {issue_id, %{attempt: attempt, due_at_ms: due_at_ms} = retry} ->
         %{
           issue_id: issue_id,
           attempt: attempt,
+          max_retries: max_retries,
           due_in_ms: max(0, due_at_ms - now_ms),
           identifier: Map.get(retry, :identifier),
           error: Map.get(retry, :error),
+          error_classification: Map.get(retry, :error_classification),
           worker_host: Map.get(retry, :worker_host),
           workspace_path: Map.get(retry, :workspace_path),
           session_file: Map.get(retry, :session_file),
