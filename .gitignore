@@ -45,3 +45,5 @@ coverage/
 
 # Skill local config (user-specific, created from template)
 /skills/pi-symphony/LOCAL.md
+.pi-rpc-sessions/
+orchestrator/elixir/pi-analytics/

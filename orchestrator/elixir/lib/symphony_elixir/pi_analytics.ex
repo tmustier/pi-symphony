@@ -27,13 +27,13 @@ defmodule SymphonyElixir.PiAnalytics do
       local_path = local_events_path(now)
 
       write_record(local_path, record, :local)
-      maybe_mirror_to_home(local_path, record, now)
+      maybe_mirror_to_home(record, local_path, now)
     end
 
     :ok
   end
 
-  defp maybe_mirror_to_home(local_path, record, now) do
+  defp maybe_mirror_to_home(record, local_path, now) do
     if home_mirror_enabled?() do
       home_path = home_events_path(now)
 
