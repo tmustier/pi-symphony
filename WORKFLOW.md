@@ -74,6 +74,10 @@ pr:
 review:
   enabled: true
   agent: pr-reviewer
+  model:
+    provider: openai-codex
+    model_id: gpt-5.4
+  thinking_level: high
   output_format: structured_markdown_v1
   max_passes: 2
   fix_consideration_severities:
