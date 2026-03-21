@@ -1251,8 +1251,6 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp maybe_cleanup_after_merge(_issue, _running_entry), do: :ok
-
   defp log_startup_config(config) do
     model_display =
       case config.pi.model do
@@ -1337,8 +1335,9 @@ defmodule SymphonyElixir.Orchestrator do
     Enum.uniq(running_identifiers ++ retry_identifiers)
   end
 
-  defp safe_identifier_for_workspace(identifier) do
-    String.replace(identifier || "issue", ~r/[^a-zA-Z0-9._-]/, "_")
+  @spec safe_identifier_for_workspace(String.t()) :: String.t()
+  defp safe_identifier_for_workspace(identifier) when is_binary(identifier) do
+    String.replace(identifier, ~r/[^a-zA-Z0-9._-]/, "_")
   end
 
   defp warn_stale_workspaces(%State{} = state, issues) when is_list(issues) do
@@ -1667,7 +1666,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_scheduled?(_state, _issue_id), do: false
 
-  @dialyzer {:no_match, termination_note: 1}
+  @spec termination_note(atom()) :: String.t()
   defp termination_note(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp refresh_runtime_config(%State{} = state) do
