@@ -84,6 +84,103 @@ defmodule SymphonyElixir.Workspace do
     {:ok, workspace, true}
   end
 
+  @doc """
+  Lists all workspace directory names under the configured workspace root.
+
+  Returns `{:ok, entries}` where each entry is a map with `:identifier` (the
+  directory basename) and `:path` (the full filesystem path). Directories whose
+  names start with `.` are excluded.
+  """
+  @spec list_workspaces() :: {:ok, [%{identifier: String.t(), path: Path.t()}]} | {:error, term()}
+  def list_workspaces do
+    root = Path.expand(Config.settings!().workspace.root)
+
+    case File.ls(root) do
+      {:ok, entries} ->
+        workspaces =
+          entries
+          |> Enum.reject(&String.starts_with?(&1, "."))
+          |> Enum.map(fn name -> %{identifier: name, path: Path.join(root, name)} end)
+          |> Enum.filter(fn entry -> File.dir?(entry.path) end)
+
+        {:ok, workspaces}
+
+      {:error, :enoent} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, {:workspace_list_failed, root, reason}}
+    end
+  end
+
+  @doc """
+  Identifies workspace directories that do not match any active issue identifier.
+
+  `active_identifiers` should be a `MapSet` of sanitized identifier strings (as
+  used for workspace directory names). Each returned entry includes an
+  `:age_hours` field computed from the directory's modification time.
+  """
+  @spec stale_workspaces([String.t()]) ::
+          {:ok, [%{identifier: String.t(), path: Path.t(), age_hours: float()}]} | {:error, term()}
+  def stale_workspaces(active_identifiers) when is_list(active_identifiers) do
+    active_set = MapSet.new(active_identifiers)
+
+    with {:ok, workspaces} <- list_workspaces() do
+      now = System.os_time(:second)
+
+      stale =
+        workspaces
+        |> Enum.reject(&MapSet.member?(active_set, &1.identifier))
+        |> Enum.map(fn entry ->
+          age_hours = workspace_age_hours(entry.path, now)
+          Map.put(entry, :age_hours, age_hours)
+        end)
+
+      {:ok, stale}
+    end
+  end
+
+  @doc """
+  Removes workspaces that are not associated with any active issue identifier.
+
+  When `retention_hours` is a positive number, only workspaces older than that
+  threshold are removed. Returns `{:ok, removed, retained}` with the lists of
+  removed and retained workspace entries.
+  """
+  @type workspace_entry :: %{identifier: String.t(), path: Path.t(), age_hours: float()}
+  @spec cleanup_stale([String.t()], number() | nil) ::
+          {:ok, [workspace_entry()], [workspace_entry()]} | {:error, term()}
+  def cleanup_stale(active_identifiers, retention_hours \\ nil) when is_list(active_identifiers) do
+    with {:ok, stale} <- stale_workspaces(active_identifiers) do
+      {to_remove, to_retain} = partition_by_retention(stale, retention_hours)
+
+      Enum.each(to_remove, fn entry ->
+        Logger.info("Cleaning up stale workspace identifier=#{entry.identifier} age_hours=#{Float.round(entry.age_hours, 1)}")
+        remove(entry.path, nil)
+      end)
+
+      {:ok, to_remove, to_retain}
+    end
+  end
+
+  defp partition_by_retention(stale, nil), do: {stale, []}
+  defp partition_by_retention(stale, hours) when is_number(hours) and hours <= 0, do: {stale, []}
+
+  defp partition_by_retention(stale, hours) when is_number(hours) do
+    Enum.split_with(stale, fn entry -> entry.age_hours >= hours end)
+  end
+
+  defp workspace_age_hours(path, now_seconds) do
+    case File.stat(path) do
+      {:ok, %File.Stat{mtime: mtime}} ->
+        mtime_seconds = :calendar.datetime_to_gregorian_seconds(mtime) - 62_167_219_200
+        max(0.0, (now_seconds - mtime_seconds) / 3600.0)
+
+      {:error, _reason} ->
+        0.0
+    end
+  end
+
   @spec remove(Path.t()) :: {:ok, [String.t()]} | {:error, term(), String.t()}
   def remove(workspace), do: remove(workspace, nil)
 

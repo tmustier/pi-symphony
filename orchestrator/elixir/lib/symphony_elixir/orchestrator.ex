@@ -90,6 +90,25 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @impl true
+  def terminate(reason, %State{} = state) do
+    Logger.info("Orchestrator shutting down reason=#{inspect(reason)}; running shutdown workspace cleanup")
+
+    if Config.settings!().workspace.cleanup_on_shutdown do
+      run_shutdown_workspace_cleanup(state)
+    else
+      Logger.info("Shutdown workspace cleanup disabled by config")
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("Shutdown workspace cleanup failed: #{Exception.message(error)}")
+      :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
+
+  @impl true
   def handle_info({:tick, tick_token}, %{tick_token: tick_token} = state)
       when is_reference(tick_token) do
     state = refresh_runtime_config(state)
@@ -294,6 +313,7 @@ defmodule SymphonyElixir.Orchestrator do
          {:ok, issues} <- Tracker.fetch_candidate_issues() do
       issues = reconcile_candidate_issue_lifecycles(issues, state)
       state = update_tracked_issues(state, issues)
+      warn_stale_workspaces(state, issues)
       state = sync_merge_queue(state, issues)
       state = maybe_start_merge_task(state)
 
@@ -666,6 +686,8 @@ defmodule SymphonyElixir.Orchestrator do
        when is_binary(issue_id) and is_map(running_entry) do
     case OrchestrationLifecycle.reconcile_after_run(issue_id, running_entry) do
       {:ok, %Issue{} = updated_issue} ->
+        maybe_cleanup_after_merge(updated_issue, running_entry)
+
         state
         |> update_tracked_issue(updated_issue)
 
@@ -1218,6 +1240,17 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
 
+  defp maybe_cleanup_after_merge(%Issue{} = issue, running_entry) when is_map(running_entry) do
+    settings = Config.settings!()
+    terminal_states = Dispatch.terminal_state_set()
+
+    if settings.workspace.cleanup_after_merge and
+         Dispatch.terminal_issue_state?(issue.state, terminal_states) do
+      Logger.info("Cleaning up workspace after merge issue_id=#{issue.id} issue_identifier=#{issue.identifier}")
+      cleanup_issue_workspace(issue.identifier, Map.get(running_entry, :worker_host))
+    end
+  end
+
   defp log_startup_config(config) do
     model_display =
       case config.pi.model do
@@ -1258,6 +1291,96 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.warning("Skipping startup terminal workspace cleanup; failed to fetch terminal issues: #{inspect(reason)}")
     end
+  end
+
+  defp run_shutdown_workspace_cleanup(%State{} = state) do
+    if Config.settings!().rollout.mode == "observe" do
+      Logger.info("Skipping shutdown workspace cleanup in observe mode")
+    else
+      active_identifiers = active_issue_identifiers(state)
+      retention_hours = Config.settings!().workspace.retention_hours
+
+      case Workspace.cleanup_stale(active_identifiers, retention_hours) do
+        {:ok, removed, retained} ->
+          Logger.info("Shutdown workspace cleanup complete removed=#{length(removed)} retained=#{length(retained)}")
+
+        {:error, reason} ->
+          Logger.warning("Shutdown workspace cleanup failed: #{inspect(reason)}")
+      end
+    end
+  end
+
+  @spec active_issue_identifiers(State.t()) :: [String.t()]
+  defp active_issue_identifiers(%State{} = state) do
+    running_identifiers =
+      state.running
+      |> Map.values()
+      |> Enum.flat_map(fn entry ->
+        case Map.get(entry, :identifier) do
+          id when is_binary(id) -> [safe_identifier_for_workspace(id)]
+          _ -> []
+        end
+      end)
+
+    retry_identifiers =
+      state.retry_attempts
+      |> Map.values()
+      |> Enum.flat_map(fn entry ->
+        case Map.get(entry, :identifier) do
+          id when is_binary(id) -> [safe_identifier_for_workspace(id)]
+          _ -> []
+        end
+      end)
+
+    Enum.uniq(running_identifiers ++ retry_identifiers)
+  end
+
+  @spec safe_identifier_for_workspace(String.t()) :: String.t()
+  defp safe_identifier_for_workspace(identifier) when is_binary(identifier) do
+    String.replace(identifier, ~r/[^a-zA-Z0-9._-]/, "_")
+  end
+
+  defp warn_stale_workspaces(%State{} = state, issues) when is_list(issues) do
+    active_identifiers = all_known_identifiers(state, issues)
+
+    case Workspace.stale_workspaces(active_identifiers) do
+      {:ok, []} ->
+        :ok
+
+      {:ok, stale} ->
+        stale
+        |> Enum.filter(&(&1.age_hours >= 1.0))
+        |> case do
+          [] ->
+            :ok
+
+          old_stale ->
+            identifiers = Enum.map_join(old_stale, ", ", & &1.identifier)
+
+            Logger.warning(
+              "Stale workspaces detected count=#{length(old_stale)} identifiers=[#{identifiers}]; " <>
+                "run POST /api/v1/workspaces/cleanup or mix workspace.cleanup to remove"
+            )
+        end
+
+      {:error, _reason} ->
+        :ok
+    end
+  rescue
+    _error -> :ok
+  end
+
+  defp warn_stale_workspaces(_state, _issues), do: :ok
+
+  @spec all_known_identifiers(State.t(), [Issue.t()]) :: [String.t()]
+  defp all_known_identifiers(%State{} = state, issues) when is_list(issues) do
+    issue_identifiers =
+      Enum.flat_map(issues, fn
+        %Issue{identifier: id} when is_binary(id) -> [safe_identifier_for_workspace(id)]
+        _ -> []
+      end)
+
+    Enum.uniq(active_issue_identifiers(state) ++ issue_identifiers)
   end
 
   defp notify_dashboard do
@@ -1543,7 +1666,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_scheduled?(_state, _issue_id), do: false
 
-  @dialyzer {:no_match, termination_note: 1}
+  @spec termination_note(atom()) :: String.t()
   defp termination_note(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp refresh_runtime_config(%State{} = state) do
