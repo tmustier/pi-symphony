@@ -941,6 +941,55 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "workspace hooks set GIT_EDITOR and GIT_TERMINAL_PROMPT to prevent interactive editors" do
+    workspace_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-headless-git-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "echo GIT_EDITOR=$GIT_EDITOR GIT_TERMINAL_PROMPT=$GIT_TERMINAL_PROMPT > env.log"
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("MT-HEADLESS")
+      env_log = File.read!(Path.join(workspace, "env.log"))
+
+      assert env_log =~ "GIT_EDITOR=true"
+      assert env_log =~ "GIT_TERMINAL_PROMPT=0"
+    after
+      File.rm_rf(workspace_root)
+    end
+  end
+
+  test "workspace git inspection sets headless git environment" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-headless-git-inspect-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      File.mkdir_p!(test_root)
+      System.cmd("git", ["-C", test_root, "init", "-b", "main"])
+      System.cmd("git", ["-C", test_root, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", test_root, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(test_root, "README.md"), "test\n")
+      System.cmd("git", ["-C", test_root, "add", "."])
+      System.cmd("git", ["-C", test_root, "commit", "-m", "initial"])
+
+      # The inspection should succeed without hanging — if GIT_EDITOR or
+      # GIT_TERMINAL_PROMPT were not set, some git operations could block.
+      assert {:ok, git_state} = WorkspaceGit.inspect_for_test(test_root)
+      assert git_state.branch == "main"
+      assert is_binary(git_state.head_sha)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "config reads defaults for optional settings" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)

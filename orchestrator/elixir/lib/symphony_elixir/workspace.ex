@@ -298,7 +298,11 @@ defmodule SymphonyElixir.Workspace do
 
     task =
       Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
+        System.cmd("sh", ["-lc", command],
+          cd: workspace,
+          stderr_to_stdout: true,
+          env: headless_git_env()
+        )
       end)
 
     case Task.yield(task, timeout_ms) do
@@ -447,6 +451,13 @@ defmodule SymphonyElixir.Workspace do
         Task.shutdown(task, :brutal_kill)
         {:error, {:workspace_hook_timeout, "remote_command", timeout_ms}}
     end
+  end
+
+  # Prevent git from spawning interactive editors or terminal prompts
+  # in headless hook processes. See: https://github.com/tmustier/pi-symphony/issues/58
+  @spec headless_git_env() :: [{String.t(), String.t()}]
+  defp headless_git_env do
+    [{"GIT_EDITOR", "true"}, {"GIT_TERMINAL_PROMPT", "0"}]
   end
 
   defp shell_escape(value) when is_binary(value) do
