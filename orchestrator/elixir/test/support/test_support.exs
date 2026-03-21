@@ -177,6 +177,8 @@ defmodule SymphonyElixir.TestSupport do
           merge_require_human_approval: true,
           merge_approval_states: [],
           merge_completion_state: nil,
+          recovery_enabled: nil,
+          recovery_max_attempts: nil,
           hook_after_create: nil,
           hook_before_run: nil,
           hook_after_run: nil,
@@ -259,6 +261,8 @@ defmodule SymphonyElixir.TestSupport do
     merge_require_human_approval = Keyword.get(config, :merge_require_human_approval)
     merge_approval_states = Keyword.get(config, :merge_approval_states)
     merge_completion_state = Keyword.get(config, :merge_completion_state)
+    recovery_enabled = Keyword.get(config, :recovery_enabled)
+    recovery_max_attempts = Keyword.get(config, :recovery_max_attempts)
     hook_after_create = Keyword.get(config, :hook_after_create)
     hook_before_run = Keyword.get(config, :hook_before_run)
     hook_after_run = Keyword.get(config, :hook_after_run)
@@ -356,6 +360,7 @@ defmodule SymphonyElixir.TestSupport do
           approval_states: merge_approval_states,
           completion_state: merge_completion_state
         }),
+        recovery_yaml(%{enabled: recovery_enabled, max_attempts: recovery_max_attempts}),
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
@@ -457,6 +462,18 @@ defmodule SymphonyElixir.TestSupport do
       "  approval_states: #{yaml_value(config.approval_states)}",
       "  completion_state: #{yaml_value(config.completion_state)}"
     ]
+    |> Enum.join("\n")
+  end
+
+  defp recovery_yaml(%{enabled: nil, max_attempts: nil}), do: nil
+
+  defp recovery_yaml(config) do
+    [
+      "recovery:",
+      !is_nil(config.enabled) && "  enabled: #{yaml_value(config.enabled)}",
+      !is_nil(config.max_attempts) && "  max_attempts: #{yaml_value(config.max_attempts)}"
+    ]
+    |> Enum.reject(&(&1 in [nil, false]))
     |> Enum.join("\n")
   end
 
