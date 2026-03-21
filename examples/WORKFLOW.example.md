@@ -82,6 +82,12 @@ review:
     - P0
     - P1
     - P2
+  # Optional: use a different model/thinking for the review subagent.
+  # When omitted, the worker's default model/thinking applies.
+  # model:
+  #   provider: anthropic
+  #   model_id: claude-sonnet-4-6
+  # thinking_level: high
 recovery:
   enabled: true
   max_attempts: 5

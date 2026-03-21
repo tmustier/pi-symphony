@@ -168,6 +168,9 @@ defmodule SymphonyElixir.TestSupport do
           review_output_format: nil,
           review_max_passes: 1,
           review_fix_consideration_severities: [],
+          review_model_provider: nil,
+          review_model_id: nil,
+          review_thinking_level: nil,
           merge_mode: "disabled",
           merge_executor: nil,
           merge_method: "squash",
@@ -253,6 +256,9 @@ defmodule SymphonyElixir.TestSupport do
     review_output_format = Keyword.get(config, :review_output_format)
     review_max_passes = Keyword.get(config, :review_max_passes)
     review_fix_consideration_severities = Keyword.get(config, :review_fix_consideration_severities)
+    review_model_provider = Keyword.get(config, :review_model_provider)
+    review_model_id = Keyword.get(config, :review_model_id)
+    review_thinking_level = Keyword.get(config, :review_thinking_level)
     merge_mode = Keyword.get(config, :merge_mode)
     merge_executor = Keyword.get(config, :merge_executor)
     merge_method = Keyword.get(config, :merge_method)
@@ -349,7 +355,10 @@ defmodule SymphonyElixir.TestSupport do
           agent: review_agent,
           output_format: review_output_format,
           max_passes: review_max_passes,
-          fix_consideration_severities: review_fix_consideration_severities
+          fix_consideration_severities: review_fix_consideration_severities,
+          model_provider: review_model_provider,
+          model_id: review_model_id,
+          thinking_level: review_thinking_level
         }),
         merge_yaml(%{
           mode: merge_mode,
@@ -446,8 +455,23 @@ defmodule SymphonyElixir.TestSupport do
       "  agent: #{yaml_value(config.agent)}",
       "  output_format: #{yaml_value(config.output_format)}",
       "  max_passes: #{yaml_value(config.max_passes)}",
-      "  fix_consideration_severities: #{yaml_value(config.fix_consideration_severities)}"
+      "  fix_consideration_severities: #{yaml_value(config.fix_consideration_severities)}",
+      review_model_yaml(config.model_provider, config.model_id),
+      config.thinking_level && "  thinking_level: #{yaml_value(config.thinking_level)}"
     ]
+    |> Enum.reject(&(&1 in [nil, false]))
+    |> Enum.join("\n")
+  end
+
+  defp review_model_yaml(nil, nil), do: nil
+
+  defp review_model_yaml(provider, model_id) do
+    [
+      "  model:",
+      provider && "    provider: #{yaml_value(provider)}",
+      model_id && "    model_id: #{yaml_value(model_id)}"
+    ]
+    |> Enum.reject(&(&1 in [nil, false]))
     |> Enum.join("\n")
   end
 
