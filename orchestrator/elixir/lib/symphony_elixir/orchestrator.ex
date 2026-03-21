@@ -1543,6 +1543,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_scheduled?(_state, _issue_id), do: false
 
+  @dialyzer {:no_match, termination_note: 1}
   defp termination_note(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp refresh_runtime_config(%State{} = state) do
