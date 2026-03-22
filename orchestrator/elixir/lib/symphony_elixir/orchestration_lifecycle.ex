@@ -1228,8 +1228,6 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     }
   end
 
-  defp passive_pr_updates_from_result(_result, _issue, _runtime, _settings), do: %{}
-
   defp stale_closed_pr_clearable?(pr_state, runtime, settings) do
     passive_pr_gate(pr_state) == "closed" and
       settings.pr.closed_pr_policy == "new_branch" and
