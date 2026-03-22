@@ -1,6 +1,6 @@
 {
   "name": "pi-symphony",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Unattended issue orchestration for Pi — polls Linear, spawns workers, manages PRs",
   "type": "module",
   "keywords": ["pi-package", "pi", "orchestration", "linear", "automation"],
