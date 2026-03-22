@@ -4272,4 +4272,234 @@ defmodule SymphonyElixir.WorkpadPrLifecycleTest do
         else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
     end
   end
+
+  test "bootstrap lifecycle transitions blocked issue to ready_to_merge when CI passes" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_repo_slug: "acme/widgets",
+      pr_required_labels: [],
+      review_enabled: false,
+      merge_mode: "auto",
+      merge_require_human_approval: false,
+      recovery_enabled: true,
+      recovery_max_attempts: 2
+    )
+
+    # Issue was blocked due to recovery_limit_exceeded, but CI has since passed
+    issue = %Issue{
+      id: "issue-blocked-ci-pass",
+      identifier: "MT-BLOCKED-CI",
+      state: "In Review",
+      title: "Blocked issue with passing CI",
+      description: "CI passes but phase stuck in blocked",
+      url: "https://example.org/issues/MT-BLOCKED-CI",
+      branch_name: "feature/blocked-ci-fix",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "wpad-blocked-ci",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: blocked\n  remediation_attempts: 2\n  branch: feature/blocked-ci-fix\n  pr:\n    number: 65\n    url: \"https://github.com/acme/widgets/pull/65\"\n    head_sha: fixedabc\n  waiting:\n    reason: recovery_limit_exceeded\n  observation:\n    next_intended_action: operator_intervention_required\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!(%{
+           "number" => 65,
+           "url" => "https://github.com/acme/widgets/pull/65",
+           "state" => "OPEN",
+           "isDraft" => false,
+           "headRefName" => "feature/blocked-ci-fix",
+           "headRefOid" => "fixedabc",
+           "baseRefName" => "main",
+           "mergeStateStatus" => "CLEAN",
+           "mergeable" => "MERGEABLE",
+           "reviewDecision" => nil,
+           "statusCheckRollup" => [
+             %{"status" => "COMPLETED", "conclusion" => "SUCCESS"}
+           ]
+         })}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      # Should have transitioned out of blocked since CI now passes
+      assert runtime.phase == "ready_to_merge"
+      refute runtime.waiting_reason == "recovery_limit_exceeded"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "bootstrap lifecycle recovers blocked issue with recovery_limit_exceeded when PR is found by branch" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      rollout_mode: "mutate",
+      orchestration_required_label: "symphony",
+      orchestration_required_workpad_marker: "## Symphony Workpad",
+      pr_auto_create: true,
+      pr_repo_slug: "acme/widgets",
+      pr_required_labels: [],
+      review_enabled: false,
+      recovery_enabled: true,
+      recovery_max_attempts: 2
+    )
+
+    # Blocked with recovery_limit_exceeded and NO pr metadata in workpad
+    issue = %Issue{
+      id: "issue-blocked-recovery-limit",
+      identifier: "MT-RECOVERY-LIMIT",
+      state: "In Review",
+      title: "Blocked issue with missing PR metadata",
+      description: "PR exists but number missing from workpad",
+      url: "https://example.org/issues/MT-RECOVERY-LIMIT",
+      branch_name: "feature/recovery-limit-test",
+      labels: ["symphony"],
+      comments: [
+        %{
+          id: "wpad-recovery-limit",
+          body:
+            "## Symphony Workpad\n\n```yaml\nsymphony:\n  phase: blocked\n  remediation_attempts: 2\n  branch: feature/recovery-limit-test\n  waiting:\n    reason: recovery_limit_exceeded\n  observation:\n    next_intended_action: operator_intervention_required\n```",
+          updated_at: DateTime.utc_now()
+        }
+      ]
+    }
+
+    try do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      # resolve_or_create finds the existing PR by branch
+      Process.put(:github_runner_results, [
+        {:ok,
+         Jason.encode!([
+           %{
+             "number" => 77,
+             "url" => "https://github.com/acme/widgets/pull/77",
+             "state" => "OPEN",
+             "isDraft" => false,
+             "headRefName" => "feature/recovery-limit-test",
+             "headRefOid" => "recovered123",
+             "baseRefName" => "main"
+           }
+         ])}
+      ])
+
+      runner = fn _command, _args, _opts ->
+        case Process.get(:github_runner_results) do
+          [result | rest] ->
+            Process.put(:github_runner_results, rest)
+            result
+
+          _ ->
+            {:error, :no_github_result}
+        end
+      end
+
+      assert {:ok, updated_issue} =
+               OrchestrationLifecycle.bootstrap_issue_for_test(
+                 issue,
+                 runner: runner,
+                 tracker_module: Memory
+               )
+
+      runtime = SymphonyElixir.OrchestrationPolicy.issue_runtime(updated_issue, Config.settings!())
+
+      # Should recover from blocked — PR was found
+      assert runtime.phase == "waiting_for_checks"
+      refute runtime.waiting_reason == "recovery_limit_exceeded"
+
+      # PR metadata should now be populated
+      pr_meta = runtime.workpad.metadata["pr"]
+      assert pr_meta["number"] == 77
+      assert pr_meta["url"] == "https://github.com/acme/widgets/pull/77"
+    after
+      if is_nil(previous_memory_issues),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_issues),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_issues, previous_memory_issues)
+
+      if is_nil(previous_memory_recipient),
+        do: Application.delete_env(:symphony_elixir, :memory_tracker_recipient),
+        else: Application.put_env(:symphony_elixir, :memory_tracker_recipient, previous_memory_recipient)
+    end
+  end
+
+  test "inspect_pr_context falls back to settings.pr.repo_slug when URL is missing" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      pr_auto_create: false,
+      pr_repo_slug: "acme/fallback-inspect",
+      pr_required_labels: []
+    )
+
+    pr_context = %{number: 42}
+
+    runner_called = fn _command, args, _opts ->
+      send(self(), {:inspect_args, args})
+
+      {:ok,
+       Jason.encode!(%{
+         "number" => 42,
+         "url" => "https://github.com/acme/fallback-inspect/pull/42",
+         "state" => "OPEN",
+         "isDraft" => false,
+         "headRefName" => "feature/test",
+         "headRefOid" => "abc123",
+         "baseRefName" => "main",
+         "mergeStateStatus" => "CLEAN",
+         "mergeable" => "MERGEABLE",
+         "reviewDecision" => nil,
+         "statusCheckRollup" => []
+       })}
+    end
+
+    assert {:ok, pr_state} = PullRequests.inspect_state_for_test(pr_context, runner: runner_called)
+    assert pr_state.number == 42
+    assert pr_state.repo_slug == "acme/fallback-inspect"
+
+    assert_received {:inspect_args, args}
+    assert "--repo" in args
+    repo_idx = Enum.find_index(args, &(&1 == "--repo"))
+    assert Enum.at(args, repo_idx + 1) == "acme/fallback-inspect"
+  end
 end

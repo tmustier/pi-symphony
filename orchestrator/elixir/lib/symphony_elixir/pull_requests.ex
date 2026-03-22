@@ -735,7 +735,8 @@ defmodule SymphonyElixir.PullRequests do
           Keyword.get(opts, :repo_slug),
           Map.get(pr_context, :repo_slug),
           Map.get(pr_context, "repo_slug"),
-          repo_slug_from_pr_url(url)
+          repo_slug_from_pr_url(url),
+          settings.pr.repo_slug
         ]),
       url: url,
       marker: pick_string([settings.pr.review_comment_marker]) || "<!-- symphony-review -->"
