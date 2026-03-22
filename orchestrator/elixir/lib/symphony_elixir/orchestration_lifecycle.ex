@@ -1067,7 +1067,7 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
   end
 
   defp maybe_recover_blocked_pr(issue, runtime, opts, settings) do
-    if blocked_with_tool_unavailable?(runtime) do
+    if blocked_phase_recoverable?(runtime, settings) do
       recover_blocked_pr(issue, runtime, opts, settings)
     else
       %{}
@@ -1149,8 +1149,9 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
 
   defp issue_workspace_path(_issue, _settings), do: nil
 
-  defp blocked_with_tool_unavailable?(runtime) do
-    runtime.phase == "blocked" and runtime.waiting_reason == "tool_unavailable"
+  defp blocked_phase_recoverable?(runtime, settings) do
+    runtime.phase == "blocked" and
+      settings.rollout.mode in ["mutate", "merge"]
   end
 
   defp workpad_branch(runtime) do
@@ -1209,6 +1210,18 @@ defmodule SymphonyElixir.OrchestrationLifecycle do
     %{
       observation_gates: %{
         "pr" => "tool_unavailable",
+        "checks" => "unknown",
+        "mergeability" => "unknown"
+      }
+    }
+  end
+
+  defp passive_pr_updates_from_result({:skip, %{reason: reason}}, _issue, _runtime, _settings) do
+    Logger.debug("Passive PR observation skipped reason=#{inspect(reason)}")
+
+    %{
+      observation_gates: %{
+        "pr" => "skipped",
         "checks" => "unknown",
         "mergeability" => "unknown"
       }
