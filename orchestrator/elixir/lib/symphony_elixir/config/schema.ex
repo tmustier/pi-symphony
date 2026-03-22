@@ -150,11 +150,11 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:max_concurrent_agents, :max_turns, :max_retry_backoff_ms, :max_retries, :max_concurrent_agents_by_state],
         [
           :max_concurrent_agents,
           :max_turns,
           :max_retry_backoff_ms,
+          :max_retries,
           :min_retry_interval_ms,
           :short_run_threshold_ms,
           :max_concurrent_agents_by_state

@@ -268,18 +268,39 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_agent_exit_reason(state, issue_id, running_entry, session_id, :normal) do
-    Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; evaluating continuation policy")
+    if Retry.short_lived_exit?(running_entry) do
+      runtime_ms = Retry.running_entry_runtime_ms(running_entry)
 
-    updated_state =
-      state
-      |> complete_issue(issue_id)
-      |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
-      |> maybe_schedule_continuation_retry(issue_id, running_entry)
+      Logger.warning(
+        "Short-lived normal exit for issue_id=#{issue_id} session_id=#{session_id}" <>
+          " runtime_ms=#{runtime_ms}; treating as transient failure with backoff"
+      )
 
-    if retry_scheduled?(updated_state, issue_id) do
-      {updated_state, "waiting", "continuation_retry_scheduled"}
+      updated_state =
+        state
+        |> complete_issue(issue_id)
+        |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
+        |> maybe_schedule_short_lived_retry(issue_id, running_entry, runtime_ms)
+
+      if retry_scheduled?(updated_state, issue_id) do
+        {updated_state, "waiting", "short_lived_exit_retry_scheduled"}
+      else
+        {updated_state, "success", "short_lived_exit_no_retry"}
+      end
     else
-      {updated_state, "success", "agent_task_completed"}
+      Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; evaluating continuation policy")
+
+      updated_state =
+        state
+        |> complete_issue(issue_id)
+        |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
+        |> maybe_schedule_continuation_retry(issue_id, running_entry)
+
+      if retry_scheduled?(updated_state, issue_id) do
+        {updated_state, "waiting", "continuation_retry_scheduled"}
+      else
+        {updated_state, "success", "agent_task_completed"}
+      end
     end
   end
 
@@ -1480,67 +1501,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp running_entry_session_id(_running_entry), do: "n/a"
 
-  defp handle_agent_exit_reason(state, :normal, issue_id, session_id, running_entry) do
-    if Retry.short_lived_exit?(running_entry) do
-      runtime_ms = Retry.running_entry_runtime_ms(running_entry)
-
-      Logger.warning(
-        "Short-lived normal exit for issue_id=#{issue_id} session_id=#{session_id}" <>
-          " runtime_ms=#{runtime_ms}; treating as transient failure with backoff"
-      )
-
-      updated_state =
-        state
-        |> complete_issue(issue_id)
-        |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
-        |> maybe_schedule_short_lived_retry(issue_id, running_entry, runtime_ms)
-
-      if retry_scheduled?(updated_state, issue_id) do
-        {updated_state, "waiting", "short_lived_exit_retry_scheduled"}
-      else
-        {updated_state, "success", "short_lived_exit_no_retry"}
-      end
-    else
-      Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; evaluating continuation policy")
-
-      updated_state =
-        state
-        |> complete_issue(issue_id)
-        |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
-        |> maybe_schedule_continuation_retry(issue_id, running_entry)
-
-      if retry_scheduled?(updated_state, issue_id) do
-        {updated_state, "waiting", "continuation_retry_scheduled"}
-      else
-        {updated_state, "success", "agent_task_completed"}
-      end
-    end
-  end
-
-  defp handle_agent_exit_reason(state, reason, issue_id, session_id, running_entry) do
-    Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
-
-    next_attempt = Retry.next_retry_attempt_from_running(running_entry)
-
-    updated_state =
-      Retry.schedule_issue_retry(
-        state,
-        issue_id,
-        next_attempt,
-        Map.merge(
-          %{
-            identifier: running_entry.identifier,
-            error: "agent exited: #{inspect(reason)}",
-            worker_host: Map.get(running_entry, :worker_host),
-            workspace_path: Map.get(running_entry, :workspace_path)
-          },
-          Retry.retry_runtime_metadata(running_entry)
-        )
-      )
-
-    {updated_state, "error", "agent_task_exited"}
-  end
-
   defp issue_context(%Issue{id: issue_id, identifier: identifier}) do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
@@ -1758,8 +1718,6 @@ defmodule SymphonyElixir.Orchestrator do
       metrics: metrics
     )
   end
-
-  defp emit_symphony_run_analytics(_running_entry, _status, _note, _metrics), do: :ok
 
   defp retry_scheduled?(%State{} = state, issue_id) when is_binary(issue_id) do
     Map.has_key?(state.retry_attempts, issue_id)
