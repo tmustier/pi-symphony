@@ -965,9 +965,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator restarts stalled workers with retry backoff" do
+    # Disable min_retry_interval so the raw exponential backoff is testable.
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
-      codex_stall_timeout_ms: 1_000
+      codex_stall_timeout_ms: 1_000,
+      min_retry_interval_ms: 0
     )
 
     issue_id = "issue-stall"

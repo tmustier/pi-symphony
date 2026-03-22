@@ -179,12 +179,45 @@ defmodule SymphonyElixir.Orchestrator.Retry do
   @spec retry_delay(pos_integer(), map()) :: pos_integer()
   @doc """
   Calculate retry delay based on attempt number and metadata.
+
+  Delay types:
+  - `:continuation` — worker ran long enough and exited normally; short delay
+  - `:short_lived_exit` — worker exited normally but ran below the short-run
+    threshold (e.g. hit a rate limit on the first API call); uses failure backoff
+    with `min_retry_interval_ms` floor
+  - anything else — failure backoff with `min_retry_interval_ms` floor
   """
   def retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
-    if metadata[:delay_type] == :continuation and attempt == 1 do
-      @continuation_retry_delay_ms
+    base_delay =
+      if metadata[:delay_type] == :continuation and attempt == 1 do
+        @continuation_retry_delay_ms
+      else
+        failure_retry_delay(attempt)
+      end
+
+    enforce_minimum_interval(base_delay, metadata)
+  end
+
+  @spec enforce_minimum_interval(pos_integer(), map()) :: pos_integer()
+  @doc """
+  Apply the configured minimum retry interval as a floor.
+
+  Genuine continuation retries (long-running workers that completed some work)
+  are exempt from the floor — they should resume quickly. Short-lived exits
+  and failure retries always respect the floor.
+
+  When rate limit information is present in `metadata[:retry_after_ms]`, it is
+  used as an additional floor alongside `min_retry_interval_ms`. The final
+  delay is the maximum of the base delay, the config floor, and the
+  rate-limit-derived floor.
+  """
+  def enforce_minimum_interval(delay_ms, metadata) when is_integer(delay_ms) and is_map(metadata) do
+    if metadata[:delay_type] == :continuation do
+      delay_ms
     else
-      failure_retry_delay(attempt)
+      config_floor = Config.settings!().agent.min_retry_interval_ms
+      rate_limit_floor = Map.get(metadata, :retry_after_ms, 0)
+      Enum.max([delay_ms, config_floor, rate_limit_floor])
     end
   end
 
@@ -196,6 +229,54 @@ defmodule SymphonyElixir.Orchestrator.Retry do
     max_delay_power = min(attempt - 1, 10)
     min(@failure_retry_base_ms * (1 <<< max_delay_power), Config.settings!().agent.max_retry_backoff_ms)
   end
+
+  @spec short_lived_exit?(map()) :: boolean()
+  @doc """
+  Determine whether a running entry represents a short-lived run.
+
+  A run is short-lived when it completed in less time than the configured
+  `short_run_threshold_ms`. Short-lived normal exits are treated as transient
+  failures (e.g. rate limits) rather than genuine work completions.
+  """
+  def short_lived_exit?(running_entry) when is_map(running_entry) do
+    threshold_ms = Config.settings!().agent.short_run_threshold_ms
+
+    case running_entry_runtime_ms(running_entry) do
+      ms when is_integer(ms) and ms < threshold_ms -> true
+      _ -> false
+    end
+  end
+
+  @spec running_entry_runtime_ms(map()) :: non_neg_integer() | nil
+  @doc """
+  Compute the runtime in milliseconds for a running entry.
+  """
+  def running_entry_runtime_ms(%{started_at: %DateTime{} = started_at}) do
+    max(0, DateTime.diff(DateTime.utc_now(), started_at, :millisecond))
+  end
+
+  def running_entry_runtime_ms(_running_entry), do: nil
+
+  @spec extract_retry_after_ms(map() | nil) :: non_neg_integer()
+  @doc """
+  Extract a retry-after floor (in milliseconds) from rate limit data.
+
+  Inspects the `primary` and `secondary` buckets for `reset_in_seconds`
+  values. When a bucket's `remaining` count is zero (rate limited), its
+  `reset_in_seconds` is converted to milliseconds. The maximum across
+  all exhausted buckets is returned.
+
+  Returns `0` when no actionable rate limit data is present.
+  """
+  def extract_retry_after_ms(rate_limits) when is_map(rate_limits) do
+    Enum.max([
+      bucket_retry_after_ms(rate_limits, ["primary", :primary]),
+      bucket_retry_after_ms(rate_limits, ["secondary", :secondary]),
+      0
+    ])
+  end
+
+  def extract_retry_after_ms(_rate_limits), do: 0
 
   @spec normalize_retry_attempt(integer() | any()) :: non_neg_integer()
   @doc """
@@ -227,6 +308,34 @@ defmodule SymphonyElixir.Orchestrator.Retry do
       proof_events_path: Map.get(running_entry, :proof_events_path),
       proof_summary_path: Map.get(running_entry, :proof_summary_path)
     }
+  end
+
+  # Private helpers for rate-limit-aware backoff
+
+  defp bucket_retry_after_ms(rate_limits, keys) when is_map(rate_limits) and is_list(keys) do
+    bucket = Enum.find_value(keys, fn key -> Map.get(rate_limits, key) end)
+    bucket_reset_ms(bucket)
+  end
+
+  defp bucket_reset_ms(bucket) when is_map(bucket) do
+    remaining = bucket_remaining(bucket)
+    reset_seconds = bucket_reset_seconds(bucket)
+
+    if is_number(remaining) and remaining <= 0 and is_number(reset_seconds) and reset_seconds > 0 do
+      round(reset_seconds * 1_000)
+    else
+      0
+    end
+  end
+
+  defp bucket_reset_ms(_bucket), do: 0
+
+  defp bucket_remaining(bucket) do
+    Map.get(bucket, "remaining") || Map.get(bucket, :remaining)
+  end
+
+  defp bucket_reset_seconds(bucket) do
+    Map.get(bucket, "reset_in_seconds") || Map.get(bucket, :reset_in_seconds)
   end
 
   # Private helper functions for picking retry values
