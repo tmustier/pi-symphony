@@ -217,6 +217,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       running_entry ->
         {updated_running_entry, token_delta} = Metrics.integrate_worker_update(running_entry, update)
+        updated_running_entry = apply_entry_rate_limits(updated_running_entry, update)
 
         state =
           state
@@ -1187,6 +1188,45 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp maybe_schedule_continuation_retry(%State{} = state, _issue_id, _running_entry), do: state
 
+  defp maybe_schedule_short_lived_retry(%State{} = state, issue_id, running_entry, runtime_ms)
+       when is_binary(issue_id) and is_map(running_entry) do
+    next_attempt = Retry.next_retry_attempt_from_running(running_entry)
+    retry_after_ms = compute_retry_after_ms(running_entry, state)
+
+    metadata =
+      Map.merge(
+        %{
+          identifier: running_entry.identifier,
+          delay_type: :short_lived_exit,
+          worker_host: Map.get(running_entry, :worker_host),
+          workspace_path: Map.get(running_entry, :workspace_path),
+          runtime_ms: runtime_ms,
+          retry_after_ms: retry_after_ms
+        },
+        Retry.retry_runtime_metadata(running_entry)
+      )
+
+    case refresh_issue_for_continuation(issue_id) do
+      {:ok, %Issue{} = refreshed_issue} ->
+        if Dispatch.retry_candidate_issue?(refreshed_issue, Dispatch.terminal_state_set(), state.tracked) do
+          Retry.schedule_issue_retry(state, issue_id, next_attempt, metadata)
+        else
+          release_issue_claim(state, issue_id)
+        end
+
+      {:ok, :missing} ->
+        release_issue_claim(state, issue_id)
+
+      {:error, reason} ->
+        Logger.debug("Failed to refresh issue for short-lived retry issue_id=#{issue_id}: #{inspect(reason)}; scheduling retry with backoff")
+
+        Retry.schedule_issue_retry(state, issue_id, next_attempt, metadata)
+    end
+  end
+
+  defp maybe_schedule_short_lived_retry(%State{} = state, _issue_id, _running_entry, _runtime_ms),
+    do: state
+
   defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata) do
     case Tracker.fetch_candidate_issues() do
       {:ok, issues} ->
@@ -1439,6 +1479,67 @@ defmodule SymphonyElixir.Orchestrator do
     do: session_id
 
   defp running_entry_session_id(_running_entry), do: "n/a"
+
+  defp handle_agent_exit_reason(state, :normal, issue_id, session_id, running_entry) do
+    if Retry.short_lived_exit?(running_entry) do
+      runtime_ms = Retry.running_entry_runtime_ms(running_entry)
+
+      Logger.warning(
+        "Short-lived normal exit for issue_id=#{issue_id} session_id=#{session_id}" <>
+          " runtime_ms=#{runtime_ms}; treating as transient failure with backoff"
+      )
+
+      updated_state =
+        state
+        |> complete_issue(issue_id)
+        |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
+        |> maybe_schedule_short_lived_retry(issue_id, running_entry, runtime_ms)
+
+      if retry_scheduled?(updated_state, issue_id) do
+        {updated_state, "waiting", "short_lived_exit_retry_scheduled"}
+      else
+        {updated_state, "success", "short_lived_exit_no_retry"}
+      end
+    else
+      Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; evaluating continuation policy")
+
+      updated_state =
+        state
+        |> complete_issue(issue_id)
+        |> reconcile_completed_issue_lifecycle(issue_id, running_entry)
+        |> maybe_schedule_continuation_retry(issue_id, running_entry)
+
+      if retry_scheduled?(updated_state, issue_id) do
+        {updated_state, "waiting", "continuation_retry_scheduled"}
+      else
+        {updated_state, "success", "agent_task_completed"}
+      end
+    end
+  end
+
+  defp handle_agent_exit_reason(state, reason, issue_id, session_id, running_entry) do
+    Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
+
+    next_attempt = Retry.next_retry_attempt_from_running(running_entry)
+
+    updated_state =
+      Retry.schedule_issue_retry(
+        state,
+        issue_id,
+        next_attempt,
+        Map.merge(
+          %{
+            identifier: running_entry.identifier,
+            error: "agent exited: #{inspect(reason)}",
+            worker_host: Map.get(running_entry, :worker_host),
+            workspace_path: Map.get(running_entry, :workspace_path)
+          },
+          Retry.retry_runtime_metadata(running_entry)
+        )
+      )
+
+    {updated_state, "error", "agent_task_exited"}
+  end
 
   defp issue_context(%Issue{id: issue_id, identifier: identifier}) do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
@@ -1759,6 +1860,20 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp apply_worker_token_delta(state, _token_delta), do: state
+
+  defp compute_retry_after_ms(running_entry, %State{} = state)
+       when is_map(running_entry) do
+    entry_retry_after = Retry.extract_retry_after_ms(Map.get(running_entry, :last_rate_limits))
+    state_retry_after = Retry.extract_retry_after_ms(state.worker_rate_limits)
+    max(entry_retry_after, state_retry_after)
+  end
+
+  defp apply_entry_rate_limits(running_entry, update) when is_map(running_entry) and is_map(update) do
+    case Metrics.extract_rate_limits(update) do
+      %{} = rate_limits -> Map.put(running_entry, :last_rate_limits, rate_limits)
+      _ -> running_entry
+    end
+  end
 
   defp apply_worker_rate_limits(%State{} = state, update) when is_map(update) do
     case Metrics.extract_rate_limits(update) do

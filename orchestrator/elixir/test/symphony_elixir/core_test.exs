@@ -666,12 +666,16 @@ defmodule SymphonyElixir.CoreTest do
 
     initial_state = :sys.get_state(pid)
 
+    # started_at must be far enough in the past to exceed the short_run_threshold_ms
+    # (default 60s), otherwise the exit is classified as short-lived and gets backoff.
+    long_ago = DateTime.add(DateTime.utc_now(), -120, :second)
+
     running_entry = %{
       pid: self(),
       ref: ref,
       identifier: "MT-558",
       issue: %Issue{id: issue_id, identifier: "MT-558", state: "In Progress"},
-      started_at: DateTime.utc_now()
+      started_at: long_ago
     }
 
     :sys.replace_state(pid, fn _ ->
@@ -732,12 +736,14 @@ defmodule SymphonyElixir.CoreTest do
 
     initial_state = :sys.get_state(pid)
 
+    long_ago = DateTime.add(DateTime.utc_now(), -120, :second)
+
     running_entry = %{
       pid: self(),
       ref: ref,
       identifier: "MT-558P",
       issue: %Issue{id: issue_id, identifier: "MT-558P", state: "In Review"},
-      started_at: DateTime.utc_now()
+      started_at: long_ago
     }
 
     :sys.replace_state(pid, fn _ ->
@@ -782,12 +788,14 @@ defmodule SymphonyElixir.CoreTest do
 
     initial_state = :sys.get_state(pid)
 
+    long_ago = DateTime.add(DateTime.utc_now(), -120, :second)
+
     running_entry = %{
       pid: self(),
       ref: ref,
       identifier: "MT-558M",
       issue: %Issue{id: issue_id, identifier: "MT-558M", state: "In Review"},
-      started_at: DateTime.utc_now()
+      started_at: long_ago
     }
 
     :sys.replace_state(pid, fn _ ->
@@ -808,6 +816,9 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
+    # Disable min_retry_interval so the raw exponential backoff is testable.
+    write_workflow_file!(Workflow.workflow_file_path(), min_retry_interval_ms: 0)
+
     issue_id = "issue-crash"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :CrashRetryOrchestrator)
@@ -848,6 +859,9 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "first abnormal worker exit waits before retrying" do
+    # Disable min_retry_interval so the raw exponential backoff is testable.
+    write_workflow_file!(Workflow.workflow_file_path(), min_retry_interval_ms: 0)
+
     issue_id = "issue-crash-initial"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :InitialCrashRetryOrchestrator)
@@ -884,6 +898,360 @@ defmodule SymphonyElixir.CoreTest do
              state.retry_attempts[issue_id]
 
     assert_due_in_range(due_at_ms, 9_000, 10_500)
+  end
+
+  test "short-lived normal exit uses failure backoff instead of continuation retry" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      short_run_threshold_ms: 60_000,
+      min_retry_interval_ms: 60_000
+    )
+
+    issue_id = "issue-short-lived"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :ShortLivedExitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    # Worker started 30s ago — well below the 60s threshold.
+    recently = DateTime.add(DateTime.utc_now(), -30, :second)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-SL1",
+      issue: %Issue{id: issue_id, identifier: "MT-SL1", state: "In Progress"},
+      started_at: recently
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+
+    # Should schedule a retry with failure backoff, NOT a 1s continuation retry.
+    # With min_retry_interval_ms=60_000, the delay must be at least 60s.
+    assert %{attempt: attempt, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
+    assert attempt >= 1
+    assert_due_in_range(due_at_ms, 59_500, 61_000)
+  end
+
+  test "short-lived normal exit increments attempt on subsequent short-lived exits" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      short_run_threshold_ms: 60_000,
+      min_retry_interval_ms: 0
+    )
+
+    issue_id = "issue-short-spin"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :ShortLivedSpinOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    # Simulate a retry_attempt=2 worker that ran for only 5 seconds.
+    recently = DateTime.add(DateTime.utc_now(), -5, :second)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-SPIN",
+      retry_attempt: 2,
+      issue: %Issue{id: issue_id, identifier: "MT-SPIN", state: "In Progress"},
+      started_at: recently
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    # Attempt should increment from 2 to 3, and delay should use exponential backoff.
+    # attempt=3 → failure_retry_delay(3) = 10_000 * 2^2 = 40_000ms
+    assert %{attempt: 3, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
+    assert_due_in_range(due_at_ms, 38_500, 41_000)
+  end
+
+  test "min_retry_interval_ms enforces a floor on failure retry delays" do
+    write_workflow_file!(Workflow.workflow_file_path(), min_retry_interval_ms: 120_000)
+
+    issue_id = "issue-min-interval"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :MinIntervalOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-FLOOR",
+      issue: %Issue{id: issue_id, identifier: "MT-FLOOR", state: "In Progress"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    # Abnormal exit — base failure delay for attempt 1 would be 10s,
+    # but min_retry_interval_ms=120s raises the floor.
+    send(pid, {:DOWN, ref, :process, self(), :boom})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
+    assert_due_in_range(due_at_ms, 119_500, 121_000)
+  end
+
+  test "short-lived exit with rate limit info uses retry_after_ms as backoff floor" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      short_run_threshold_ms: 60_000,
+      min_retry_interval_ms: 60_000
+    )
+
+    issue_id = "issue-rate-limited"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :RateLimitBackoffOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    # Worker started 10s ago — well below the 60s threshold.
+    recently = DateTime.add(DateTime.utc_now(), -10, :second)
+
+    # Simulate rate limit info captured during the worker's lifetime.
+    # primary bucket is exhausted with a 120s reset.
+    rate_limits = %{
+      "limit_id" => "anthropic",
+      "primary" => %{"remaining" => 0, "limit" => 100, "reset_in_seconds" => 120},
+      "secondary" => nil
+    }
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-RL1",
+      issue: %Issue{id: issue_id, identifier: "MT-RL1", state: "In Progress"},
+      started_at: recently,
+      last_rate_limits: rate_limits
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+
+    # The retry_after_ms from the rate limit (120s) exceeds min_retry_interval_ms (60s),
+    # so the delay should be at least 120s.
+    assert %{attempt: attempt, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
+    assert attempt >= 1
+    assert_due_in_range(due_at_ms, 119_000, 121_000)
+  end
+
+  test "short-lived exit uses state-level rate limits as fallback for retry_after_ms" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      short_run_threshold_ms: 60_000,
+      min_retry_interval_ms: 60_000
+    )
+
+    issue_id = "issue-state-rate-limit"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :StateRateLimitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    recently = DateTime.add(DateTime.utc_now(), -10, :second)
+
+    # No per-entry rate limits, but the state has global rate limit info
+    # from a previous worker's events.
+    state_rate_limits = %{
+      "limit_id" => "anthropic",
+      "primary" => %{"remaining" => 0, "limit" => 100, "reset_in_seconds" => 90}
+    }
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-SRL",
+      issue: %Issue{id: issue_id, identifier: "MT-SRL", state: "In Progress"},
+      started_at: recently
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+      |> Map.put(:worker_rate_limits, state_rate_limits)
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    # The state-level rate limit has 90s reset, which exceeds min_retry_interval_ms (60s),
+    # so the delay should be at least 90s.
+    assert %{attempt: attempt, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
+    assert attempt >= 1
+    assert_due_in_range(due_at_ms, 89_000, 91_000)
+  end
+
+  test "rate limit info from worker updates is stored in the running entry" do
+    issue_id = "issue-rl-update"
+    orchestrator_name = Module.concat(__MODULE__, :RateLimitUpdateOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: "MT-RLU",
+      session_id: nil,
+      issue: %Issue{id: issue_id, identifier: "MT-RLU", state: "In Progress"},
+      started_at: DateTime.utc_now(),
+      last_worker_message: nil,
+      last_worker_timestamp: nil,
+      last_worker_event: nil,
+      worker_pid: nil,
+      worker_input_tokens: 0,
+      worker_output_tokens: 0,
+      worker_total_tokens: 0,
+      worker_last_reported_input_tokens: 0,
+      worker_last_reported_output_tokens: 0,
+      worker_last_reported_total_tokens: 0,
+      turn_count: 0
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+    end)
+
+    # Send a worker update with rate limit info
+    rate_limits = %{
+      "limit_id" => "anthropic",
+      "primary" => %{"remaining" => 5, "limit" => 100, "reset_in_seconds" => 30}
+    }
+
+    send(
+      pid,
+      {:worker_update, issue_id,
+       %{
+         event: :notification,
+         timestamp: DateTime.utc_now(),
+         payload: %{"rate_limits" => rate_limits}
+       }}
+    )
+
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    # Rate limits should be stored in the running entry
+    updated_entry = state.running[issue_id]
+    assert updated_entry.last_rate_limits == rate_limits
+  end
+
+  test "extract_retry_after_ms returns 0 when buckets are not exhausted" do
+    alias SymphonyElixir.Orchestrator.Retry
+
+    rate_limits = %{
+      "limit_id" => "anthropic",
+      "primary" => %{"remaining" => 50, "limit" => 100, "reset_in_seconds" => 30}
+    }
+
+    assert Retry.extract_retry_after_ms(rate_limits) == 0
+    assert Retry.extract_retry_after_ms(nil) == 0
+    assert Retry.extract_retry_after_ms(%{}) == 0
+  end
+
+  test "extract_retry_after_ms returns reset time when a bucket is exhausted" do
+    alias SymphonyElixir.Orchestrator.Retry
+
+    rate_limits = %{
+      "limit_id" => "anthropic",
+      "primary" => %{"remaining" => 0, "limit" => 100, "reset_in_seconds" => 95},
+      "secondary" => %{"remaining" => 0, "limit" => 60, "reset_in_seconds" => 45}
+    }
+
+    # Should return the max of all exhausted buckets: 95s = 95_000ms
+    assert Retry.extract_retry_after_ms(rate_limits) == 95_000
+  end
+
+  test "extract_retry_after_ms handles atom keys" do
+    alias SymphonyElixir.Orchestrator.Retry
+
+    rate_limits = %{
+      limit_id: "anthropic",
+      primary: %{remaining: 0, limit: 100, reset_in_seconds: 60}
+    }
+
+    assert Retry.extract_retry_after_ms(rate_limits) == 60_000
   end
 
   test "stale retry timer messages do not consume newer retry entries" do

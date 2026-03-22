@@ -127,6 +127,8 @@ defmodule SymphonyElixir.TestSupport do
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
           max_retries: 10,
+          min_retry_interval_ms: 60_000,
+          short_run_threshold_ms: 60_000,
           max_concurrent_agents_by_state: %{},
           codex_command: "codex app-server",
           codex_approval_policy: %{reject: %{sandbox_approval: true, rules: true, mcp_elicitations: true}},
@@ -215,6 +217,8 @@ defmodule SymphonyElixir.TestSupport do
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_retries = Keyword.get(config, :max_retries)
+    min_retry_interval_ms = Keyword.get(config, :min_retry_interval_ms)
+    short_run_threshold_ms = Keyword.get(config, :short_run_threshold_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
     codex_command = Keyword.get(config, :codex_command)
     codex_approval_policy = Keyword.get(config, :codex_approval_policy)
@@ -305,6 +309,8 @@ defmodule SymphonyElixir.TestSupport do
         "  max_turns: #{yaml_value(max_turns)}",
         "  max_retry_backoff_ms: #{yaml_value(max_retry_backoff_ms)}",
         "  max_retries: #{yaml_value(max_retries)}",
+        "  min_retry_interval_ms: #{yaml_value(min_retry_interval_ms)}",
+        "  short_run_threshold_ms: #{yaml_value(short_run_threshold_ms)}",
         "  max_concurrent_agents_by_state: #{yaml_value(max_concurrent_agents_by_state)}",
         "codex:",
         "  command: #{yaml_value(codex_command)}",
