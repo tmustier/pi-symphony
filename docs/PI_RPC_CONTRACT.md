@@ -80,7 +80,7 @@ The worker runner does not need the full Pi RPC surface.
 ### Optional future commands
 
 - `get_messages`
-- `get_commands`
+- `get_commands` (current Pi returns command provenance under `sourceInfo`; older top-level `path` / `location` fields are gone)
 
 ## 4. v1 worker lifecycle
 
