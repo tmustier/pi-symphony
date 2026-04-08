@@ -181,12 +181,18 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     }
 
     orchestrator_name = Module.concat(__MODULE__, :UsageOrchestrator)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    configure_memory_tracker_issues([issue])
+
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     on_exit(fn ->
       if Process.alive?(pid) do
         Process.exit(pid, :normal)
       end
+
+      restore_memory_tracker_issues(previous_memory_issues)
     end)
 
     initial_state = :sys.get_state(pid)
@@ -258,7 +264,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert is_integer(snapshot_entry.runtime_seconds)
 
     send(pid, {:DOWN, process_ref, :process, self(), :normal})
-    completed_state = :sys.get_state(pid)
+    completed_state = wait_for_issue_completion(pid, issue_id)
 
     assert completed_state.worker_totals.input_tokens == 12
     assert completed_state.worker_totals.output_tokens == 4
@@ -279,12 +285,18 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     }
 
     orchestrator_name = Module.concat(__MODULE__, :TurnCompletedUsageOrchestrator)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    configure_memory_tracker_issues([issue])
+
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     on_exit(fn ->
       if Process.alive?(pid) do
         Process.exit(pid, :normal)
       end
+
+      restore_memory_tracker_issues(previous_memory_issues)
     end)
 
     initial_state = :sys.get_state(pid)
@@ -335,7 +347,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert snapshot_entry.worker_total_tokens == 16
 
     send(pid, {:DOWN, process_ref, :process, self(), :normal})
-    completed_state = :sys.get_state(pid)
+    completed_state = wait_for_issue_completion(pid, issue_id)
     assert completed_state.worker_totals.input_tokens == 12
     assert completed_state.worker_totals.output_tokens == 4
     assert completed_state.worker_totals.total_tokens == 16
@@ -354,12 +366,18 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     }
 
     orchestrator_name = Module.concat(__MODULE__, :TokenCountOrchestrator)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    configure_memory_tracker_issues([issue])
+
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     on_exit(fn ->
       if Process.alive?(pid) do
         Process.exit(pid, :normal)
       end
+
+      restore_memory_tracker_issues(previous_memory_issues)
     end)
 
     initial_state = :sys.get_state(pid)
@@ -447,7 +465,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert snapshot_entry.worker_total_tokens == 15
 
     send(pid, {:DOWN, process_ref, :process, self(), :normal})
-    completed_state = :sys.get_state(pid)
+    completed_state = wait_for_issue_completion(pid, issue_id)
 
     assert completed_state.worker_totals.input_tokens == 10
     assert completed_state.worker_totals.output_tokens == 5
@@ -1754,6 +1772,63 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert rendered =~ "app_status=offline"
     refute rendered =~ "Timestamp:"
+  end
+
+  @orchestrator_state_timeout_ms 15_000
+
+  defp configure_memory_tracker_issues(issues, overrides \\ []) when is_list(issues) do
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      Keyword.merge(
+        [tracker_kind: "memory", tracker_active_states: ["Todo", "In Progress", "In Review"]],
+        overrides
+      )
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+  end
+
+  defp restore_memory_tracker_issues(nil), do: Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+
+  defp restore_memory_tracker_issues(value),
+    do: Application.put_env(:symphony_elixir, :memory_tracker_issues, value)
+
+  defp wait_for_issue_completion(pid, issue_id, timeout_ms \\ 2_000) when is_binary(issue_id) do
+    wait_for_state(
+      pid,
+      fn state -> not Map.has_key?(state.running, issue_id) end,
+      timeout_ms
+    )
+  end
+
+  defp wait_for_state(pid, predicate, timeout_ms) when is_function(predicate, 1) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_state(pid, predicate, deadline_ms)
+  end
+
+  defp do_wait_for_state(pid, predicate, deadline_ms) do
+    remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    if remaining_ms == 0 do
+      flunk("timed out waiting for orchestrator state")
+    end
+
+    state_timeout_ms = min(@orchestrator_state_timeout_ms, max(remaining_ms, 1))
+
+    state =
+      try do
+        :sys.get_state(pid, state_timeout_ms)
+      catch
+        :exit, {:timeout, {:sys, :get_state, [_pid, _timeout]}} ->
+          flunk("timed out waiting for orchestrator state")
+      end
+
+    if predicate.(state) do
+      state
+    else
+      Process.sleep(5)
+      do_wait_for_state(pid, predicate, deadline_ms)
+    end
   end
 
   defp wait_for_snapshot(pid, predicate, timeout_ms \\ 200) when is_function(predicate, 1) do

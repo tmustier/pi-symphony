@@ -656,12 +656,20 @@ defmodule SymphonyElixir.CoreTest do
     issue_id = "issue-resume"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :ContinuationOrchestrator)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    configure_memory_tracker_issues([
+      %Issue{id: issue_id, identifier: "MT-558", state: "In Progress", title: "Continuation retry"}
+    ])
+
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     on_exit(fn ->
       if Process.alive?(pid) do
         Process.exit(pid, :normal)
       end
+
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
     end)
 
     initial_state = :sys.get_state(pid)
@@ -898,20 +906,27 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "short-lived normal exit uses failure backoff instead of continuation retry" do
-    write_workflow_file!(Workflow.workflow_file_path(),
+    issue_id = "issue-short-lived"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :ShortLivedExitOrchestrator)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    configure_memory_tracker_issues(
+      [
+        %Issue{id: issue_id, identifier: "MT-SL1", state: "In Progress", title: "Short-lived retry"}
+      ],
       short_run_threshold_ms: 60_000,
       min_retry_interval_ms: 60_000
     )
 
-    issue_id = "issue-short-lived"
-    ref = make_ref()
-    orchestrator_name = Module.concat(__MODULE__, :ShortLivedExitOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     on_exit(fn ->
       if Process.alive?(pid) do
         Process.exit(pid, :normal)
       end
+
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
     end)
 
     initial_state = :sys.get_state(pid)
@@ -948,20 +963,27 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "short-lived normal exit increments attempt on subsequent short-lived exits" do
-    write_workflow_file!(Workflow.workflow_file_path(),
+    issue_id = "issue-short-spin"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :ShortLivedSpinOrchestrator)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    configure_memory_tracker_issues(
+      [
+        %Issue{id: issue_id, identifier: "MT-SPIN", state: "In Progress", title: "Short spin retry"}
+      ],
       short_run_threshold_ms: 60_000,
       min_retry_interval_ms: 0
     )
 
-    issue_id = "issue-short-spin"
-    ref = make_ref()
-    orchestrator_name = Module.concat(__MODULE__, :ShortLivedSpinOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     on_exit(fn ->
       if Process.alive?(pid) do
         Process.exit(pid, :normal)
       end
+
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
     end)
 
     initial_state = :sys.get_state(pid)
@@ -1035,20 +1057,27 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "short-lived exit with rate limit info uses retry_after_ms as backoff floor" do
-    write_workflow_file!(Workflow.workflow_file_path(),
+    issue_id = "issue-rate-limited"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :RateLimitBackoffOrchestrator)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    configure_memory_tracker_issues(
+      [
+        %Issue{id: issue_id, identifier: "MT-RL1", state: "In Progress", title: "Rate limited retry"}
+      ],
       short_run_threshold_ms: 60_000,
       min_retry_interval_ms: 60_000
     )
 
-    issue_id = "issue-rate-limited"
-    ref = make_ref()
-    orchestrator_name = Module.concat(__MODULE__, :RateLimitBackoffOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     on_exit(fn ->
       if Process.alive?(pid) do
         Process.exit(pid, :normal)
       end
+
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
     end)
 
     initial_state = :sys.get_state(pid)
@@ -1094,20 +1123,27 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "short-lived exit uses state-level rate limits as fallback for retry_after_ms" do
-    write_workflow_file!(Workflow.workflow_file_path(),
+    issue_id = "issue-state-rate-limit"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :StateRateLimitOrchestrator)
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    configure_memory_tracker_issues(
+      [
+        %Issue{id: issue_id, identifier: "MT-SRL", state: "In Progress", title: "State rate limit retry"}
+      ],
       short_run_threshold_ms: 60_000,
       min_retry_interval_ms: 60_000
     )
 
-    issue_id = "issue-state-rate-limit"
-    ref = make_ref()
-    orchestrator_name = Module.concat(__MODULE__, :StateRateLimitOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     on_exit(fn ->
       if Process.alive?(pid) do
         Process.exit(pid, :normal)
       end
+
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
     end)
 
     initial_state = :sys.get_state(pid)
@@ -1366,6 +1402,7 @@ defmodule SymphonyElixir.CoreTest do
   @retry_delay_tolerance_ms 250
   @retry_wait_timeout_ms 1_000
   @retry_wait_interval_ms 10
+  @retry_state_timeout_ms 15_000
 
   defp assert_remaining_delay(due_at_ms, observed_at_ms, expected_delay_ms) do
     remaining_ms = due_at_ms - observed_at_ms
@@ -1388,18 +1425,40 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   defp do_wait_for_state(pid, predicate, deadline_ms) do
-    state = :sys.get_state(pid)
+    remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    if remaining_ms == 0 do
+      flunk("timed out waiting for orchestrator state")
+    end
+
+    state_timeout_ms = min(@retry_state_timeout_ms, max(remaining_ms, 1))
+
+    state =
+      try do
+        :sys.get_state(pid, state_timeout_ms)
+      catch
+        :exit, {:timeout, {:sys, :get_state, [_pid, _timeout]}} ->
+          flunk("timed out waiting for orchestrator state")
+      end
 
     if predicate.(state) do
       {state, System.monotonic_time(:millisecond)}
     else
-      if System.monotonic_time(:millisecond) >= deadline_ms do
-        flunk("timed out waiting for orchestrator state")
-      else
-        Process.sleep(@retry_wait_interval_ms)
-        do_wait_for_state(pid, predicate, deadline_ms)
-      end
+      Process.sleep(@retry_wait_interval_ms)
+      do_wait_for_state(pid, predicate, deadline_ms)
     end
+  end
+
+  defp configure_memory_tracker_issues(issues, overrides \\ []) when is_list(issues) do
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      Keyword.merge(
+        [tracker_kind: "memory", tracker_active_states: ["Todo", "In Progress", "In Review"]],
+        overrides
+      )
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
