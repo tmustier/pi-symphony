@@ -686,14 +686,13 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     send(pid, {:DOWN, ref, :process, self(), :normal})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+    {state, observed_at_ms} = wait_for_retry_attempt(pid, issue_id)
 
     refute Map.has_key?(state.running, issue_id)
     assert MapSet.member?(state.completed, issue_id)
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
-    assert_due_in_range(due_at_ms, 500, 1_100)
+    assert_remaining_delay(due_at_ms, observed_at_ms, 1_000)
   end
 
   test "normal worker exit does not schedule immediate retry for passive orchestration phases" do
@@ -849,13 +848,12 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     send(pid, {:DOWN, ref, :process, self(), :boom})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+    {state, observed_at_ms} = wait_for_retry_attempt(pid, issue_id)
 
     assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 38_500, 40_500)
+    assert_remaining_delay(due_at_ms, observed_at_ms, 40_000)
   end
 
   test "first abnormal worker exit waits before retrying" do
@@ -891,13 +889,12 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     send(pid, {:DOWN, ref, :process, self(), :boom})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+    {state, observed_at_ms} = wait_for_retry_attempt(pid, issue_id)
 
     assert %{attempt: 1, due_at_ms: due_at_ms, identifier: "MT-560", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 9_000, 10_500)
+    assert_remaining_delay(due_at_ms, observed_at_ms, 10_000)
   end
 
   test "short-lived normal exit uses failure backoff instead of continuation retry" do
@@ -938,8 +935,7 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     send(pid, {:DOWN, ref, :process, self(), :normal})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+    {state, observed_at_ms} = wait_for_retry_attempt(pid, issue_id)
 
     refute Map.has_key?(state.running, issue_id)
     assert MapSet.member?(state.completed, issue_id)
@@ -948,7 +944,7 @@ defmodule SymphonyElixir.CoreTest do
     # With min_retry_interval_ms=60_000, the delay must be at least 60s.
     assert %{attempt: attempt, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert attempt >= 1
-    assert_due_in_range(due_at_ms, 59_500, 61_000)
+    assert_remaining_delay(due_at_ms, observed_at_ms, 60_000)
   end
 
   test "short-lived normal exit increments attempt on subsequent short-lived exits" do
@@ -990,13 +986,12 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     send(pid, {:DOWN, ref, :process, self(), :normal})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+    {state, observed_at_ms} = wait_for_retry_attempt(pid, issue_id)
 
     # Attempt should increment from 2 to 3, and delay should use exponential backoff.
     # attempt=3 → failure_retry_delay(3) = 10_000 * 2^2 = 40_000ms
     assert %{attempt: 3, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
-    assert_due_in_range(due_at_ms, 38_500, 41_000)
+    assert_remaining_delay(due_at_ms, observed_at_ms, 40_000)
   end
 
   test "min_retry_interval_ms enforces a floor on failure retry delays" do
@@ -1033,11 +1028,10 @@ defmodule SymphonyElixir.CoreTest do
     # Abnormal exit — base failure delay for attempt 1 would be 10s,
     # but min_retry_interval_ms=120s raises the floor.
     send(pid, {:DOWN, ref, :process, self(), :boom})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+    {state, observed_at_ms} = wait_for_retry_attempt(pid, issue_id)
 
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
-    assert_due_in_range(due_at_ms, 119_500, 121_000)
+    assert_remaining_delay(due_at_ms, observed_at_ms, 120_000)
   end
 
   test "short-lived exit with rate limit info uses retry_after_ms as backoff floor" do
@@ -1087,8 +1081,7 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     send(pid, {:DOWN, ref, :process, self(), :normal})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+    {state, observed_at_ms} = wait_for_retry_attempt(pid, issue_id)
 
     refute Map.has_key?(state.running, issue_id)
     assert MapSet.member?(state.completed, issue_id)
@@ -1097,7 +1090,7 @@ defmodule SymphonyElixir.CoreTest do
     # so the delay should be at least 120s.
     assert %{attempt: attempt, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert attempt >= 1
-    assert_due_in_range(due_at_ms, 119_000, 121_000)
+    assert_remaining_delay(due_at_ms, observed_at_ms, 120_000)
   end
 
   test "short-lived exit uses state-level rate limits as fallback for retry_after_ms" do
@@ -1145,14 +1138,13 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     send(pid, {:DOWN, ref, :process, self(), :normal})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+    {state, observed_at_ms} = wait_for_retry_attempt(pid, issue_id)
 
     # The state-level rate limit has 90s reset, which exceeds min_retry_interval_ms (60s),
     # so the delay should be at least 90s.
     assert %{attempt: attempt, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert attempt >= 1
-    assert_due_in_range(due_at_ms, 89_000, 91_000)
+    assert_remaining_delay(due_at_ms, observed_at_ms, 90_000)
   end
 
   test "rate limit info from worker updates is stored in the running entry" do
@@ -1371,11 +1363,43 @@ defmodule SymphonyElixir.CoreTest do
     assert Orchestrator.select_worker_host_for_test(state, "worker-a") == "worker-a"
   end
 
-  defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
-    remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
+  @retry_delay_tolerance_ms 250
+  @retry_wait_timeout_ms 1_000
+  @retry_wait_interval_ms 10
 
-    assert remaining_ms >= min_remaining_ms
-    assert remaining_ms <= max_remaining_ms
+  defp assert_remaining_delay(due_at_ms, observed_at_ms, expected_delay_ms) do
+    remaining_ms = due_at_ms - observed_at_ms
+
+    assert remaining_ms >= expected_delay_ms - @retry_delay_tolerance_ms
+    assert remaining_ms <= expected_delay_ms + @retry_delay_tolerance_ms
+  end
+
+  defp wait_for_retry_attempt(pid, issue_id, timeout_ms \\ @retry_wait_timeout_ms) do
+    wait_for_state(
+      pid,
+      fn state -> Map.has_key?(state.retry_attempts, issue_id) end,
+      timeout_ms
+    )
+  end
+
+  defp wait_for_state(pid, predicate, timeout_ms) when is_function(predicate, 1) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_state(pid, predicate, deadline_ms)
+  end
+
+  defp do_wait_for_state(pid, predicate, deadline_ms) do
+    state = :sys.get_state(pid)
+
+    if predicate.(state) do
+      {state, System.monotonic_time(:millisecond)}
+    else
+      if System.monotonic_time(:millisecond) >= deadline_ms do
+        flunk("timed out waiting for orchestrator state")
+      else
+        Process.sleep(@retry_wait_interval_ms)
+        do_wait_for_state(pid, predicate, deadline_ms)
+      end
+    end
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
