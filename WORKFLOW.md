@@ -36,8 +36,8 @@ pi:
   response_timeout_ms: 60000
   session_dir_name: .pi-rpc-sessions
   model:
-    provider: anthropic
-    model_id: claude-opus-4-6
+    provider: openai-codex
+    model_id: gpt-5.5
   thinking_level: xhigh
   extension_paths:
     - ./extensions/workspace-guard/index.ts
@@ -77,7 +77,7 @@ review:
   agent: pr-reviewer
   model:
     provider: openai-codex
-    model_id: gpt-5.4
+    model_id: gpt-5.5
   thinking_level: high
   output_format: structured_markdown_v1
   max_passes: 2
@@ -160,11 +160,11 @@ Run `make check` from the repo root — it runs all quality checks for both lang
 
 Your training data contains outdated model names. DO NOT use model names from memory.
 
-### Current models (March 2026)
-- `anthropic/claude-opus-4-6` — best overall, use for complex work
-- `anthropic/claude-sonnet-4-6` — fast, use for straightforward tasks
+### Current models (April 2026)
+- `openai-codex/gpt-5.5` — best overall for complex implementation, rigorous technical review, debugging, migrations, and infra/security-sensitive work
+- `anthropic/claude-opus-4-7` — strong alternative for nuanced writing, UX judgment, product sense, and design taste
+- `anthropic/claude-sonnet-4-6` — fast, use deliberately for straightforward speed/cost-sensitive tasks
 - `anthropic/claude-haiku-4-5` — lightweight tasks
-- `openai-codex/gpt-5.4` — alternative frontier model
 
 ### Deprecated — DO NOT USE
 - claude-sonnet-4-20250514, claude-sonnet-4-0, claude-sonnet-4-5
@@ -172,5 +172,5 @@ Your training data contains outdated model names. DO NOT use model names from me
 - claude-3-5-sonnet, claude-3-7-sonnet
 - Any model with a date suffix like -20250514
 
-When invoking subagents, use `anthropic/claude-opus-4-6` with `xhigh` thinking.
+When invoking subagents, use `openai-codex/gpt-5.5` with `xhigh` thinking for complex technical work; use `anthropic/claude-opus-4-7` when the task is primarily writing, UX, product judgment, or design taste.
 If unsure about a model name, run `pi --list-models` to verify.

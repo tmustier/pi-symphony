@@ -37,8 +37,8 @@ pi:
   response_timeout_ms: 60000
   session_dir_name: .pi-rpc-sessions
   model:
-    provider: anthropic
-    model_id: claude-opus-4-6
+    provider: openai-codex
+    model_id: gpt-5.5
   thinking_level: xhigh
   extension_paths:
     - ../extensions/workspace-guard/index.ts
@@ -58,7 +58,7 @@ pi:
   #       priority: [1, 2]
   #     model:
   #       provider: anthropic
-  #       model_id: claude-opus-4-6
+  #       model_id: claude-opus-4-7
   #     thinking_level: xhigh
 orchestration:
   phase_store: workpad

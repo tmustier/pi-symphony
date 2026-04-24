@@ -49,7 +49,7 @@ Worker process configuration.
 | `response_timeout_ms` | 60000 | Timeout waiting for a Pi RPC response. |
 | `session_dir_name` | `.pi-rpc-sessions` | Subdirectory name for Pi session files within the workspace. |
 | `model.provider` | — | Model provider (e.g. `anthropic`, `openai-codex`). |
-| `model.model_id` | — | Model ID. Use current models only: `claude-opus-4-6` (best), `claude-sonnet-4-6` (fast), `gpt-5.4`. Do NOT use deprecated dated models like `claude-sonnet-4-20250514`. |
+| `model.model_id` | — | Model ID. Use current models only: `gpt-5.5` (best for technical work), `claude-opus-4-7` (best for writing/UX/product judgment), `claude-sonnet-4-6` (fast). Do NOT use deprecated dated models like `claude-sonnet-4-20250514`. |
 | `thinking_level` | — | Thinking level for workers (`off`, `low`, `medium`, `high`, `xhigh`). |
 | `extension_paths` | `[]` | Paths to worker extensions, resolved relative to WORKFLOW.md. |
 | `disable_extensions` | `true` | Disable ambient extension discovery in workers. Recommended. |
@@ -63,21 +63,21 @@ Route different issues to different models based on issue metadata. Each rule ha
 ```yaml
 pi:
   model:
-    provider: anthropic
-    model_id: claude-sonnet-4-6
+    provider: openai-codex
+    model_id: gpt-5.5
   thinking_level: high
   model_routing:
     - match:
         labels: [complex, architecture]
       model:
-        provider: anthropic
-        model_id: claude-opus-4-6
+        provider: openai-codex
+        model_id: gpt-5.5
       thinking_level: xhigh
     - match:
-        priority: [1, 2]
+        labels: [writing, ux, product]
       model:
         provider: anthropic
-        model_id: claude-opus-4-6
+        model_id: claude-opus-4-7
     - match:
         state: [Rework]
       thinking_level: xhigh

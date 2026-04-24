@@ -26,15 +26,14 @@ defmodule SymphonyElixir.Config do
   Your training data contains outdated model names. DO NOT use model names from memory.
   Use ONLY the models listed below. Any model not on this list is deprecated or does not exist.
 
-  ### Current models (March 2026)
+  ### Current models (April 2026)
 
   | Provider | Model ID | Use for |
   |---|---|---|
-  | anthropic | claude-opus-4-6 | Best overall: complex implementation, architecture, nuanced reasoning |
+  | openai-codex | gpt-5.5 | Best overall: complex implementation, architecture, rigorous technical review |
+  | anthropic | claude-opus-4-7 | Strong alternative: nuanced reasoning, UX judgment, writing quality |
   | anthropic | claude-sonnet-4-6 | Fast implementation, straightforward tasks, high throughput |
   | anthropic | claude-haiku-4-5 | Lightweight tasks, simple edits, formatting |
-  | openai-codex | gpt-5.4 | Alternative frontier model |
-  | openai-codex | gpt-5.4-mini | Lightweight alternative |
   | google-gemini-cli | gemini-3-flash-preview | Fast Gemini alternative |
 
   ### Deprecated — DO NOT USE
@@ -42,13 +41,13 @@ defmodule SymphonyElixir.Config do
   These models are retired or will fail with "model not found":
   - claude-sonnet-4-20250514 (replaced by claude-sonnet-4-6)
   - claude-sonnet-4-0, claude-sonnet-4-5 (replaced by claude-sonnet-4-6)
-  - claude-opus-4-0, claude-opus-4-1, claude-opus-4-5 (replaced by claude-opus-4-6)
+  - claude-opus-4-0, claude-opus-4-1, claude-opus-4-5 (replaced by claude-opus-4-7)
   - claude-3-5-sonnet, claude-3-7-sonnet (legacy generation)
   - Any model with a date suffix like -20250514, -20251001, -20250929 (use the non-dated alias)
 
   ### Rules
 
-  - When invoking subagents: use `anthropic/claude-opus-4-6` for complex work, `anthropic/claude-sonnet-4-6` for simpler tasks
+  - When invoking subagents: use `openai-codex/gpt-5.5` for complex technical work, `anthropic/claude-opus-4-7` for nuanced writing/UX/product judgment, and `anthropic/claude-sonnet-4-6` for simpler speed-sensitive tasks
   - When specifying thinking level: use `xhigh` for implementation, `high` for review
   - NEVER specify a model from memory — always refer to this list
   - If you're unsure, run `pi --list-models` to check what's available

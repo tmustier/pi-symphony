@@ -1615,7 +1615,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       pi_session_dir_name: "../nested/pi-sessions",
       pi_extension_paths: ["extensions/workspace-guard/index.ts", "./extensions/proof/index.ts"],
       pi_model_provider: "openai",
-      pi_model_id: "gpt-5.4",
+      pi_model_id: "gpt-5.5",
       pi_thinking_level: "xhigh"
     )
 
@@ -1631,7 +1631,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            ]
 
     assert Config.settings!().pi.model.provider == "openai"
-    assert Config.settings!().pi.model.model_id == "gpt-5.4"
+    assert Config.settings!().pi.model.model_id == "gpt-5.5"
     assert Config.settings!().pi.thinking_level == "xhigh"
   end
 
@@ -1669,7 +1669,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       worker_runtime: "pi",
       pi_model_provider: "anthropic",
-      pi_model_id: "claude-opus-4-6",
+      pi_model_id: "claude-opus-4-7",
       pi_thinking_level: "xhigh",
       review_enabled: true,
       review_agent: "pr-reviewer",
@@ -1683,7 +1683,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     settings = Config.settings!()
 
     assert settings.pi.model.provider == "anthropic"
-    assert settings.pi.model.model_id == "claude-opus-4-6"
+    assert settings.pi.model.model_id == "claude-opus-4-7"
     assert settings.pi.thinking_level == "xhigh"
 
     assert settings.review.model.provider == "anthropic"
@@ -1843,7 +1843,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
             labels: [complex, architecture]
           model:
             provider: anthropic
-            model_id: claude-opus-4-6
+            model_id: claude-opus-4-7
           thinking_level: xhigh
         - match:
             labels: [simple]
@@ -1868,7 +1868,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     {model, thinking} = Schema.resolve_model_for_issue(settings, complex_issue)
     assert model.provider == "anthropic"
-    assert model.model_id == "claude-opus-4-6"
+    assert model.model_id == "claude-opus-4-7"
     assert thinking == "xhigh"
 
     simple_issue = %Issue{
@@ -1911,7 +1911,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
             priority: [1, 2]
           model:
             provider: anthropic
-            model_id: claude-opus-4-6
+            model_id: claude-opus-4-7
           thinking_level: xhigh
     ---
     """
@@ -1929,7 +1929,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     }
 
     {model, thinking} = Schema.resolve_model_for_issue(settings, urgent_issue)
-    assert model.model_id == "claude-opus-4-6"
+    assert model.model_id == "claude-opus-4-7"
     assert thinking == "xhigh"
 
     low_prio_issue = %Issue{
@@ -1958,7 +1958,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
             state: [Rework]
           model:
             provider: anthropic
-            model_id: claude-opus-4-6
+            model_id: claude-opus-4-7
           thinking_level: xhigh
     ---
     """
@@ -1975,7 +1975,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     }
 
     {model, _thinking} = Schema.resolve_model_for_issue(settings, rework_issue)
-    assert model.model_id == "claude-opus-4-6"
+    assert model.model_id == "claude-opus-4-7"
 
     todo_issue = %Issue{
       id: "state-2",
@@ -2002,7 +2002,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
             priority: [1]
           model:
             provider: anthropic
-            model_id: claude-opus-4-6
+            model_id: claude-opus-4-7
           thinking_level: xhigh
     ---
     """
@@ -2022,7 +2022,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     }
 
     {model, _thinking} = Schema.resolve_model_for_issue(settings, both_match)
-    assert model.model_id == "claude-opus-4-6"
+    assert model.model_id == "claude-opus-4-7"
 
     # Only label matches — should fall through
     only_label = %Issue{
@@ -2085,7 +2085,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
             labels: [COMPLEX]
           model:
             provider: anthropic
-            model_id: claude-opus-4-6
+            model_id: claude-opus-4-7
     ---
     """
 
@@ -2102,7 +2102,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     }
 
     {model, _thinking} = Schema.resolve_model_for_issue(settings, issue)
-    assert model.model_id == "claude-opus-4-6"
+    assert model.model_id == "claude-opus-4-7"
   end
 
   test "model routing skips routes with empty match conditions" do
@@ -2117,7 +2117,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
             labels: []
           model:
             provider: anthropic
-            model_id: claude-opus-4-6
+            model_id: claude-opus-4-7
         - match:
             labels: [real-match]
           model:
@@ -2208,7 +2208,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
             labels: [special]
           model:
             provider: anthropic
-            model_id: claude-opus-4-6
+            model_id: claude-opus-4-7
     ---
     """
 
@@ -2223,7 +2223,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     }
 
     {model, thinking} = Config.resolve_pi_model_for_issue(issue)
-    assert model.model_id == "claude-opus-4-6"
+    assert model.model_id == "claude-opus-4-7"
     assert thinking == "high"
   end
 end

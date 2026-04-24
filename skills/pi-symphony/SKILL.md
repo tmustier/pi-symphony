@@ -69,14 +69,14 @@ The WORKFLOW.template.md ships with tested defaults. If you need to change the m
 
 1. Run `pi --list-models` to see what's available
 2. Pick a model that supports thinking (check the `thinking` column)
-3. Use the short alias (e.g. `claude-opus-4-6`), never a dated version (e.g. `claude-opus-4-20250514`)
+3. Use the short alias (e.g. `claude-opus-4-7`), never a dated version (e.g. `claude-opus-4-20250514`)
 
 ### Common mistakes to avoid
 
 - **Using model names from memory** — models are updated frequently; names you "know" may be retired
 - **Using dated model IDs** (e.g. `claude-sonnet-4-20250514`) — these get deprecated; use the non-dated alias
 - **Wrong provider prefix** — it's `anthropic` for Claude, `openai-codex` for GPT, `google-gemini-cli` for Gemini
-- **Mismatched provider/model** — `openai/claude-opus-4-6` will fail; Claude models use `anthropic` provider
+- **Mismatched provider/model** — `openai/claude-opus-4-7` will fail; Claude models use `anthropic` provider
 
 ## Setting up a target repo
 

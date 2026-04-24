@@ -23,7 +23,7 @@ defmodule SymphonyElixir.Orchestrator.ErrorClassifierTest do
     end
 
     test "classifies 'no such model' as permanent" do
-      result = ErrorClassifier.classify("no such model openai/gpt-5.4")
+      result = ErrorClassifier.classify("no such model openai/gpt-5.5")
 
       assert result.classification == :permanent
       assert result.category == "model_not_found"

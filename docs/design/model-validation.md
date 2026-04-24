@@ -134,17 +134,17 @@ config parse time.
 ```yaml
 # models.yml
 aliases:
-  best: anthropic/claude-opus-4-6
+  best: openai-codex/gpt-5.5
+  writing: anthropic/claude-opus-4-7
   fast: anthropic/claude-sonnet-4-6
   light: anthropic/claude-haiku-4-5
-  codex: openai-codex/gpt-5.4
 ```
 
 ```yaml
 # WORKFLOW.md
 pi:
   model:
-    alias: best  # resolved to anthropic/claude-opus-4-6
+    alias: best  # resolved to openai-codex/gpt-5.5
 ```
 
 **Pros:**
@@ -313,11 +313,11 @@ end
 The full `pi --list-models` output contains ~50 models. For prompt injection,
 filter to a curated "recommended" subset:
 
-1. **Exclude dated variants** — if both `claude-opus-4-6` and
-   `claude-opus-4-5-20251101` exist, only show `claude-opus-4-6`
+1. **Exclude dated variants** — if both `claude-opus-4-7` and
+   `claude-opus-4-5-20251101` exist, only show `claude-opus-4-7`
 2. **Exclude legacy generations** — `claude-3-*` models when `claude-*-4-*` exist
 3. **Group by use case** — "best for complex work", "fast", "lightweight"
-4. **Include provider prefix** — workers need `anthropic/claude-opus-4-6` format
+4. **Include provider prefix** — workers need `openai-codex/gpt-5.5` format
 
 This keeps the injected table to ~10–15 rows (~300 tokens), smaller than the
 current static table.

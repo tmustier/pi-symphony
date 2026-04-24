@@ -272,7 +272,7 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
         worker_runtime: "pi",
         pi_command: fake_pi,
         pi_model_provider: "openai",
-        pi_model_id: "gpt-5.4",
+        pi_model_id: "gpt-5.5",
         pi_thinking_level: "xhigh"
       )
 
@@ -293,7 +293,7 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
                )
 
       trace = File.read!(trace_file)
-      assert trace =~ ~s("id":97,"modelId":"gpt-5.4","provider":"openai","type":"set_model")
+      assert trace =~ ~s("id":97,"modelId":"gpt-5.5","provider":"openai","type":"set_model")
       assert trace =~ ~s("id":98,"level":"xhigh","type":"set_thinking_level")
       assert trace =~ ~s("id":5,"message":)
       assert trace =~ ~s("type":"prompt")
