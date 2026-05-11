@@ -4,6 +4,7 @@ defmodule SymphonyElixir.Pi.RpcClient do
   """
 
   alias SymphonyElixir.{Config, PathSafety}
+  alias SymphonyElixir.Pi.CommandResolver
 
   @get_state_id 1
   @set_session_name_id 2
@@ -246,24 +247,28 @@ defmodule SymphonyElixir.Pi.RpcClient do
   end
 
   defp start_port(workspace, session_dir) do
-    executable = System.find_executable("bash")
-
-    if is_nil(executable) do
-      {:error, :bash_not_found}
-    else
+    with {:ok, executable} <- find_bash(),
+         {:ok, pi_command} <- CommandResolver.resolve(Config.settings!().pi.command) do
       port =
         Port.open(
           {:spawn_executable, String.to_charlist(executable)},
           [
             :binary,
             :exit_status,
-            args: [~c"-lc", String.to_charlist(build_command(session_dir))],
+            args: [~c"-lc", String.to_charlist(build_command(session_dir, pi_command))],
             cd: String.to_charlist(workspace),
             line: @port_line_bytes
           ]
         )
 
       {:ok, port}
+    end
+  end
+
+  defp find_bash do
+    case System.find_executable("bash") do
+      nil -> {:error, :bash_not_found}
+      executable -> {:ok, executable}
     end
   end
 
@@ -323,13 +328,13 @@ defmodule SymphonyElixir.Pi.RpcClient do
 
   defp auto_cancel_inline(_port, _payload), do: :ok
 
-  defp build_command(session_dir) do
+  defp build_command(session_dir, pi_command) do
     settings = Config.settings!()
     pi = settings.pi
 
     flags =
       [
-        pi.command,
+        shell_escape(pi_command),
         "--mode rpc",
         "--session-dir #{shell_escape(session_dir)}",
         pi.disable_extensions && "--no-extensions",

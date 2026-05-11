@@ -7,7 +7,16 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.{Config, Orchestrator, Workspace}
-  alias SymphonyElixir.Observability.{ArtifactReader, EventStore, PhaseTransition, PrStatus, RunSnapshot, WorkspaceStatus}
+
+  alias SymphonyElixir.Observability.{
+    ArtifactReader,
+    EventStore,
+    PhaseTransition,
+    PrStatus,
+    RunSnapshot,
+    WorkspaceStatus
+  }
+
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   @spec state(Conn.t(), map()) :: Conn.t()
@@ -41,9 +50,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   @spec run_workspace(Conn.t(), map()) :: Conn.t()
   def run_workspace(conn, %{"issue_identifier" => issue_identifier}) do
-    with {:ok, run} <- lookup_run(issue_identifier) do
-      json(conn, WorkspaceStatus.payload(run))
-    else
+    case lookup_run(issue_identifier) do
+      {:ok, run} -> json(conn, WorkspaceStatus.payload(run))
       {:error, reason} -> run_lookup_error(conn, reason)
     end
   end
@@ -52,20 +60,21 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   def run_pr(conn, %{"issue_identifier" => issue_identifier} = params) do
     refresh? = Map.get(params, "refresh") in ["true", true]
 
-    with {:ok, run} <- lookup_run(issue_identifier) do
-      if refresh? do
-        case PrStatus.live_payload(run) do
-          {:ok, payload} -> json(conn, payload)
-          {:skip, reason} -> pr_refresh_skip(conn, reason)
-          {:error, reason} -> pr_refresh_error(conn, reason)
-        end
-      else
-        json(conn, PrStatus.cached_payload(run))
-      end
-    else
+    case lookup_run(issue_identifier) do
+      {:ok, run} -> run_pr_payload(conn, run, refresh?)
       {:error, reason} -> run_lookup_error(conn, reason)
     end
   end
+
+  defp run_pr_payload(conn, run, true) do
+    case PrStatus.live_payload(run) do
+      {:ok, payload} -> json(conn, payload)
+      {:skip, reason} -> pr_refresh_skip(conn, reason)
+      {:error, reason} -> pr_refresh_error(conn, reason)
+    end
+  end
+
+  defp run_pr_payload(conn, run, false), do: json(conn, PrStatus.cached_payload(run))
 
   @spec run_logs(Conn.t(), map()) :: Conn.t()
   def run_logs(conn, %{"issue_identifier" => issue_identifier} = params) do

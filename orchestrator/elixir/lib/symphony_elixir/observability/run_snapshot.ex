@@ -9,7 +9,7 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
   alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
   import SymphonyElixir.MapUtils, only: [fetch_value: 2]
 
-  @default_statuses MapSet.new(["active", "retrying", "tracked"])
+  @default_status_values ["active", "retrying", "tracked"]
   @default_limit 100
   @max_limit 500
 
@@ -19,7 +19,7 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
-        all_runs = snapshot |> build_runs(@default_statuses) |> Enum.map(&public_run_payload(&1, false))
+        all_runs = snapshot |> build_runs(default_statuses()) |> Enum.map(&public_run_payload(&1, false))
         page = snapshot |> build_runs(status_filter(params)) |> page_runs(params)
 
         %{
@@ -54,7 +54,7 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
         snapshot
-        |> build_runs(@default_statuses)
+        |> build_runs(default_statuses())
         |> Enum.find(&(&1.issue_identifier == issue_identifier))
         |> case do
           nil -> {:error, :issue_not_found}
@@ -69,10 +69,12 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
     end
   end
 
+  @spec status_filter(map()) :: [String.t()]
   defp status_filter(%{"status" => statuses}), do: parse_statuses(statuses)
   defp status_filter(%{status: statuses}), do: parse_statuses(statuses)
-  defp status_filter(_params), do: @default_statuses
+  defp status_filter(_params), do: default_statuses()
 
+  @spec parse_statuses(term()) :: [String.t()]
   defp parse_statuses(statuses) when is_binary(statuses) do
     statuses
     |> String.split(",", trim: true)
@@ -81,22 +83,25 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
       "running" -> "active"
       status -> status
     end)
-    |> Enum.filter(&(&1 in ["active", "retrying", "tracked"]))
+    |> Enum.filter(&(&1 in @default_status_values))
     |> case do
-      [] -> @default_statuses
-      parsed -> MapSet.new(parsed)
+      [] -> default_statuses()
+      parsed -> Enum.uniq(parsed)
     end
   end
 
   defp parse_statuses(statuses) when is_list(statuses) do
     statuses
-    |> Enum.map(&to_string/1)
-    |> Enum.join(",")
+    |> Enum.map_join(",", &to_string/1)
     |> parse_statuses()
   end
 
-  defp parse_statuses(_statuses), do: @default_statuses
+  defp parse_statuses(_statuses), do: default_statuses()
 
+  @spec default_statuses() :: [String.t()]
+  defp default_statuses, do: @default_status_values
+
+  @spec build_runs(map(), [String.t()]) :: [map()]
   defp build_runs(snapshot, statuses) do
     running_by_identifier =
       snapshot
@@ -136,7 +141,7 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
         tracked: tracked
       }
     end)
-    |> Enum.filter(&MapSet.member?(statuses, &1.status))
+    |> Enum.filter(&(&1.status in statuses))
   end
 
   defp page_runs(runs, params) do
@@ -213,7 +218,12 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
     retrying = run.retrying || %{}
 
     %{
-      id: first_present([fetch_value(tracked, :issue_id), fetch_value(running, :issue_id), fetch_value(retrying, :issue_id)]),
+      id:
+        first_present([
+          fetch_value(tracked, :issue_id),
+          fetch_value(running, :issue_id),
+          fetch_value(retrying, :issue_id)
+        ]),
       identifier: run.issue_identifier,
       title: fetch_value(tracked, :title),
       url: fetch_value(tracked, :url),
@@ -341,30 +351,45 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
   end
 
   defp attention_payload(run) do
+    run
+    |> attention_context()
+    |> attention_payload_from_context()
+  end
+
+  defp attention_context(run) do
     tracked = run.tracked || %{}
     retrying = run.retrying || %{}
     kill_switch = fetch_value(tracked, :kill_switch) || %{}
-    waiting_reason = fetch_value(tracked, :waiting_reason)
-    phase = fetch_value(tracked, :phase)
-    retry_attempt = fetch_value(retrying, :attempt) || 0
-    max_retries = fetch_value(retrying, :max_retries) || Config.settings!().agent.max_retries
 
-    cond do
-      fetch_value(kill_switch, :active) == true ->
-        %{required: true, reason: "kill_switch_active", severity: "error"}
+    %{
+      kill_switch_active?: fetch_value(kill_switch, :active) == true,
+      waiting_reason: fetch_value(tracked, :waiting_reason),
+      phase: fetch_value(tracked, :phase),
+      retry_attempt: fetch_value(retrying, :attempt) || 0,
+      max_retries: fetch_value(retrying, :max_retries) || Config.settings!().agent.max_retries
+    }
+  end
 
-      phase == "blocked" ->
-        %{required: true, reason: waiting_reason || "blocked", severity: "warning"}
+  defp attention_payload_from_context(%{kill_switch_active?: true}) do
+    %{required: true, reason: "kill_switch_active", severity: "error"}
+  end
 
-      waiting_reason in ["human_approval_required", "needs_human", "input_required"] ->
-        %{required: true, reason: waiting_reason, severity: "warning"}
+  defp attention_payload_from_context(%{phase: "blocked", waiting_reason: waiting_reason}) do
+    %{required: true, reason: waiting_reason || "blocked", severity: "warning"}
+  end
 
-      retry_attempt > 0 and retry_attempt >= max_retries ->
-        %{required: true, reason: "retry_exhausted", severity: "error"}
+  defp attention_payload_from_context(%{waiting_reason: waiting_reason})
+       when waiting_reason in ["human_approval_required", "needs_human", "input_required"] do
+    %{required: true, reason: waiting_reason, severity: "warning"}
+  end
 
-      true ->
-        %{required: false, reason: nil, severity: "info"}
-    end
+  defp attention_payload_from_context(%{retry_attempt: retry_attempt, max_retries: max_retries})
+       when retry_attempt > 0 and retry_attempt >= max_retries do
+    %{required: true, reason: "retry_exhausted", severity: "error"}
+  end
+
+  defp attention_payload_from_context(_context) do
+    %{required: false, reason: nil, severity: "info"}
   end
 
   defp attempts_payload(nil) do
@@ -459,14 +484,12 @@ defmodule SymphonyElixir.Observability.RunSnapshot do
 
   defp workpad_metadata(_tracked), do: %{}
 
-  defp workpad_observation(tracked) when is_map(tracked) do
+  defp workpad_observation(tracked) do
     tracked
     |> fetch_value(:workpad)
     |> fetch_value(:observation)
     |> normalize_map()
   end
-
-  defp workpad_observation(_tracked), do: %{}
 
   defp normalize_map(value) when is_map(value) do
     Map.new(value, fn {key, nested} -> {to_string(key), nested} end)

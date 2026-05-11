@@ -125,6 +125,8 @@ export LINEAR_API_KEY=$(security find-generic-password -a "pi-symphony" -s "LINE
 # If not in keychain, store it: security add-generic-password -a "pi-symphony" -s "LINEAR_API_KEY" -w "lin_api_..." -U
 gh auth status                     # GitHub CLI must be authenticated
 which pi && pi --version           # Pi must be available
+# If multiple Pi installs exist, Symphony resolves bare `pi` to the newest Pi on the
+# orchestrator PATH before workers enter bash; set pi.command to an absolute path to force one.
 ```
 
 ### Launch

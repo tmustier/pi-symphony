@@ -59,30 +59,35 @@ defmodule SymphonyElixir.Observability.WorkspaceStatus do
 
   defp inspect_local_git(workspace_path) do
     if safe_local_workspace_path?(workspace_path) and File.dir?(workspace_path) do
-      task =
-        Task.async(fn ->
-          with {:ok, branch} <- git(workspace_path, ["branch", "--show-current"]),
-               {:ok, head_sha} <- git(workspace_path, ["rev-parse", "HEAD"]),
-               {:ok, status} <- git(workspace_path, ["status", "--porcelain"]) do
-            {:ok,
-             %{
-               branch: present(branch),
-               head_sha: present(head_sha),
-               dirty: String.trim(status) != "",
-               remote_branch_published: cached_remote_branch?(workspace_path, branch)
-             }}
-          else
-            {:error, _reason} = error -> error
-          end
-        end)
-
-      case Task.yield(task, @inspect_timeout_ms) || Task.shutdown(task, :brutal_kill) do
-        {:ok, {:ok, git}} -> {:ok, git}
-        {:ok, {:error, reason}} -> {:error, reason}
-        nil -> {:error, :timeout}
-      end
+      inspect_local_git_with_timeout(workspace_path)
     else
       {:error, :missing_workspace}
+    end
+  end
+
+  defp inspect_local_git_with_timeout(workspace_path) do
+    task = Task.async(fn -> inspect_local_git_now(workspace_path) end)
+
+    case Task.yield(task, @inspect_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, git}} -> {:ok, git}
+      {:ok, {:error, reason}} -> {:error, reason}
+      nil -> {:error, :timeout}
+    end
+  end
+
+  defp inspect_local_git_now(workspace_path) do
+    with {:ok, branch} <- git(workspace_path, ["branch", "--show-current"]),
+         {:ok, head_sha} <- git(workspace_path, ["rev-parse", "HEAD"]),
+         {:ok, status} <- git(workspace_path, ["status", "--porcelain"]) do
+      {:ok,
+       %{
+         branch: present(branch),
+         head_sha: present(head_sha),
+         dirty: String.trim(status) != "",
+         remote_branch_published: cached_remote_branch?(workspace_path, branch)
+       }}
+    else
+      {:error, _reason} = error -> error
     end
   end
 
@@ -134,8 +139,6 @@ defmodule SymphonyElixir.Observability.WorkspaceStatus do
       {:error, _reason} -> false
     end
   end
-
-  defp safe_local_workspace_path?(_workspace_path), do: false
 
   defp canonical_path(path) do
     case path |> Path.expand() |> resolve_symlinks(0) do
@@ -201,6 +204,4 @@ defmodule SymphonyElixir.Observability.WorkspaceStatus do
       trimmed -> trimmed
     end
   end
-
-  defp present(_value), do: nil
 end

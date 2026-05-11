@@ -187,7 +187,9 @@ defmodule SymphonyElixir.Observability.EventStore do
     filtered =
       events
       |> Enum.filter(fn event ->
-        issue_match?(event, issue_identifier) and type_match?(event, types) and cursor_match?(event, cursor_sequence, direction)
+        issue_match?(event, issue_identifier) and
+          type_match?(event, types) and
+          cursor_match?(event, cursor_sequence, direction)
       end)
       |> maybe_reverse(direction)
 
