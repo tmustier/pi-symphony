@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.Presenter do
   """
 
   alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
+  alias SymphonyElixir.Observability.{ArtifactReader, RunSnapshot}
   import SymphonyElixir.MapUtils, only: [fetch_value: 2]
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
@@ -60,15 +61,23 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   @spec transcript_payload(String.t(), GenServer.name(), timeout()) ::
-          {:ok, map()} | {:error, :issue_not_found | :no_session_file}
+          {:ok, map()}
+          | {:error, :issue_not_found | :no_session_file | :snapshot_timeout | :snapshot_unavailable | :unsafe_path | :not_regular_file | :read_failed}
   def transcript_payload(issue_identifier, orchestrator, snapshot_timeout_ms) when is_binary(issue_identifier) do
-    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
-      %{} = snapshot ->
-        running = Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
-        resolve_transcript(issue_identifier, running)
+    with {:ok, run} <- RunSnapshot.lookup_run(issue_identifier, orchestrator, snapshot_timeout_ms),
+         {:ok, artifact} <- ArtifactReader.read(run, %{"kind" => "session"}) do
+      entries = Enum.take(artifact.entries, 500)
 
-      _ ->
-        {:error, :issue_not_found}
+      {:ok,
+       %{
+         issue_identifier: issue_identifier,
+         file: artifact.file,
+         entries: entries,
+         truncated: artifact.truncated or length(artifact.entries) > length(entries)
+       }}
+    else
+      {:error, :no_artifact_path} -> {:error, :no_session_file}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -400,85 +409,4 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp iso8601(_datetime), do: nil
-
-  # ─── Transcript helpers ────────────────────────────
-
-  defp resolve_transcript(_issue_identifier, nil), do: {:error, :no_session_file}
-
-  defp resolve_transcript(issue_identifier, running) do
-    session_file = Map.get(running, :session_file)
-    session_dir = Map.get(running, :session_dir)
-
-    resolve_transcript_path(issue_identifier, session_file, session_dir)
-  end
-
-  defp resolve_transcript_path(issue_identifier, session_file, _session_dir)
-       when is_binary(session_file) do
-    if File.exists?(session_file) do
-      {:ok, read_transcript(issue_identifier, session_file)}
-    else
-      {:error, :no_session_file}
-    end
-  end
-
-  defp resolve_transcript_path(issue_identifier, _session_file, session_dir)
-       when is_binary(session_dir) do
-    case find_latest_session_file(session_dir) do
-      nil -> {:error, :no_session_file}
-      path -> {:ok, read_transcript(issue_identifier, path)}
-    end
-  end
-
-  defp resolve_transcript_path(_issue_identifier, _session_file, _session_dir),
-    do: {:error, :no_session_file}
-
-  defp read_transcript(issue_identifier, path) do
-    lines =
-      path
-      |> File.stream!()
-      |> Stream.take(500)
-      |> Enum.map(&parse_jsonl_line/1)
-      |> Enum.reject(&is_nil/1)
-
-    %{
-      issue_identifier: issue_identifier,
-      file: Path.basename(path),
-      entries: lines,
-      truncated: length(lines) >= 500
-    }
-  end
-
-  defp parse_jsonl_line(line) do
-    line
-    |> String.trim()
-    |> case do
-      "" -> nil
-      trimmed -> safe_json_decode(trimmed)
-    end
-  end
-
-  defp safe_json_decode(text) do
-    case Jason.decode(text) do
-      {:ok, decoded} -> decoded
-      _ -> %{"raw" => String.slice(text, 0, 500)}
-    end
-  end
-
-  defp find_latest_session_file(dir) when is_binary(dir) do
-    if File.dir?(dir) do
-      dir
-      |> File.ls!()
-      |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
-      |> Enum.sort(:desc)
-      |> List.first()
-      |> case do
-        nil -> nil
-        filename -> Path.join(dir, filename)
-      end
-    else
-      nil
-    end
-  rescue
-    _ -> nil
-  end
 end

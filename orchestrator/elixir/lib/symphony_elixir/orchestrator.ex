@@ -20,6 +20,7 @@ defmodule SymphonyElixir.Orchestrator do
   }
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Observability.{EventStore, PhaseTransition}
   alias SymphonyElixir.Orchestrator.{Dispatch, Metrics, Retry}
 
   # Slightly above the dashboard render interval so "checking now…" can render.
@@ -218,6 +219,7 @@ defmodule SymphonyElixir.Orchestrator do
       running_entry ->
         {updated_running_entry, token_delta} = Metrics.integrate_worker_update(running_entry, update)
         updated_running_entry = apply_entry_rate_limits(updated_running_entry, update)
+        EventStore.append_worker_update(issue_id, Map.get(running_entry, :identifier), update, updated_running_entry)
 
         state =
           state
@@ -1770,11 +1772,18 @@ defmodule SymphonyElixir.Orchestrator do
       |> Map.new(fn tracked_issue -> {tracked_issue.issue_id, tracked_issue} end)
 
     tracked = compute_blocks(tracked)
+    emit_phase_transitions(state.tracked, tracked, observed_at, "poll_reconcile")
 
     %{state | tracked: tracked}
   end
 
   defp update_tracked_issues(state, _issues), do: state
+
+  defp emit_phase_transitions(previous_tracked, current_tracked, observed_at, source) do
+    previous_tracked
+    |> PhaseTransition.transitions_from_tracked_update(current_tracked, at: observed_at, source: source)
+    |> Enum.each(&EventStore.append_phase_transition/1)
+  end
 
   defp compute_blocks(tracked) when is_map(tracked) do
     # Invert blocked_by: if B says "blocked_by A", then A blocks B.
@@ -1799,10 +1808,14 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp update_tracked_issue(%State{} = state, %Issue{id: issue_id} = issue) when is_binary(issue_id) do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
     tracked_issue =
       issue
       |> OrchestrationPolicy.tracked_issue(Config.settings!())
-      |> Map.put(:observed_at, DateTime.utc_now() |> DateTime.truncate(:second))
+      |> Map.put(:observed_at, observed_at)
+
+    emit_phase_transitions(state.tracked, Map.put(state.tracked, issue_id, tracked_issue), observed_at, "single_issue_update")
 
     %{state | tracked: Map.put(state.tracked, issue_id, tracked_issue)}
   end

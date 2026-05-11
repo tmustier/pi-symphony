@@ -570,7 +570,7 @@ defmodule SymphonyElixir.PullRequests do
     ]
 
     with {:ok, output} <- runner.("gh", args, []),
-         {:ok, pr} <- Jason.decode(output) do
+         {:ok, %{} = pr} <- Jason.decode(output) do
       {:ok, normalize_inspected_pull_request(pr, context.repo_slug)}
     else
       {:error, reason} -> {:error, reason}

@@ -25,11 +25,12 @@ defmodule SymphonyElixir.Application do
 
     # :rest_for_one — if the Orchestrator crashes, restart the HttpServer and
     # StatusDashboard so they don't serve stale state.  PubSub, TaskSupervisor,
-    # and WorkflowStore are independent infrastructure that survives restarts.
+    # WorkflowStore, and EventStore are independent infrastructure that survives restarts.
     children = [
       {Phoenix.PubSub, name: SymphonyElixir.PubSub},
       {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
       SymphonyElixir.WorkflowStore,
+      SymphonyElixir.Observability.EventStore,
       SymphonyElixir.Orchestrator,
       SymphonyElixir.HttpServer,
       SymphonyElixir.StatusDashboard
