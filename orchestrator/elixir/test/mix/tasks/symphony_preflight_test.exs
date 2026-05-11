@@ -58,4 +58,58 @@ defmodule Mix.Tasks.Symphony.PreflightTest do
     assert output =~ "thinking: high"
     assert output =~ "superseded"
   end
+
+  test "preflight validates models against the latest Pi resolved on PATH" do
+    root = Path.join(System.tmp_dir!(), "symphony-preflight-pi-path-#{System.unique_integer([:positive])}")
+    old_bin = Path.join(root, "old")
+    new_bin = Path.join(root, "new")
+    original_path = System.get_env("PATH") || ""
+
+    try do
+      File.mkdir_p!(old_bin)
+      File.mkdir_p!(new_bin)
+
+      old_pi = Path.join(old_bin, "pi")
+      new_pi = Path.join(new_bin, "pi")
+      fake_gh = Path.join(old_bin, "gh")
+
+      File.write!(old_pi, fake_pi_script("0.52.12", "anthropic/claude-sonnet-4-6"))
+      File.write!(new_pi, fake_pi_script("0.74.0", "anthropic/claude-opus-4-7"))
+      File.write!(fake_gh, "#!/bin/sh\necho 'Logged in to github.com account test-user'\n")
+      Enum.each([old_pi, new_pi, fake_gh], &File.chmod!(&1, 0o755))
+
+      System.put_env("PATH", Enum.join([old_bin, new_bin, original_path], ":"))
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        rollout_mode: "observe",
+        worker_runtime: "pi",
+        pi_command: "pi",
+        pi_model_provider: "anthropic",
+        pi_model_id: "claude-opus-4-7"
+      )
+
+      output = ExUnit.CaptureIO.capture_io(fn -> Preflight.run([]) end)
+
+      assert output =~ "Pi command"
+      assert output =~ new_pi
+      assert output =~ "version 0.74.0"
+      assert output =~ "anthropic/claude-opus-4-7 found"
+      refute output =~ "not found in `#{old_pi} --list-models`"
+    after
+      System.put_env("PATH", original_path)
+      File.rm_rf(root)
+    end
+  end
+
+  defp fake_pi_script(version, listed_model) do
+    """
+    #!/bin/sh
+    case "$1" in
+      --version) echo "#{version}" ;;
+      --list-models) echo "#{listed_model}" ;;
+      *) exit 0 ;;
+    esac
+    """
+  end
 end

@@ -29,9 +29,9 @@ defmodule SymphonyElixir.Orchestrator.ErrorClassifier do
         }
 
   @permanent_patterns [
-    {~r/model[_ ]not[_ ]found/i, "model_not_found", "Check pi.model in WORKFLOW.md; run `pi --list-models` to see available models"},
-    {~r/invalid[_ ]model/i, "model_not_found", "Check pi.model in WORKFLOW.md; run `pi --list-models` to see available models"},
-    {~r/no[_ ]such[_ ]model/i, "model_not_found", "Check pi.model in WORKFLOW.md; run `pi --list-models` to see available models"},
+    {~r/model[_ ]not[_ ]found/i, "model_not_found", "Check pi.command and pi.model in WORKFLOW.md; run the resolved Pi command (for example `pi --list-models`) to see available models"},
+    {~r/invalid[_ ]model/i, "model_not_found", "Check pi.command and pi.model in WORKFLOW.md; run the resolved Pi command (for example `pi --list-models`) to see available models"},
+    {~r/no[_ ]such[_ ]model/i, "model_not_found", "Check pi.command and pi.model in WORKFLOW.md; run the resolved Pi command (for example `pi --list-models`) to see available models"},
     {~r/api[_ ]key[_ ](invalid|missing|not[_ ]found|expired)/i, "invalid_api_key", "Set a valid API key in the environment or WORKFLOW.md tracker.api_key"},
     {~r/invalid[_ ]api[_ ]key/i, "invalid_api_key", "Set a valid API key in the environment or WORKFLOW.md tracker.api_key"},
     {~r/authentication[_ ]failed/i, "auth_failure", "Verify API credentials are valid and not expired"},
@@ -41,6 +41,8 @@ defmodule SymphonyElixir.Orchestrator.ErrorClassifier do
     {~r/invalid[_ ]workflow[_ ]config/i, "invalid_config", "Fix the WORKFLOW.md configuration and restart"},
     {~r/missing[_ ]workflow[_ ]file/i, "invalid_config", "Ensure WORKFLOW.md exists at the expected path"},
     {~r/bash[_ ]not[_ ]found/i, "missing_dependency", "Ensure bash is installed and available in PATH"},
+    {~r/pi[_ ]command[_ ]not[_ ]found/i, "command_not_found", "The Pi command is not found or not executable; check pi.command in WORKFLOW.md"},
+    {~r/relative[_ ]pi[_ ]command[_ ]not[_ ]supported/i, "invalid_config", "Set pi.command to `pi` or an absolute path"},
     {~r/remote[_ ]pi[_ ]workers[_ ]not[_ ]supported/i, "unsupported_config", "Pi runtime does not support SSH worker hosts; remove worker.ssh_hosts or use codex runtime"}
   ]
 
@@ -122,6 +124,14 @@ defmodule SymphonyElixir.Orchestrator.ErrorClassifier do
     else
       :transient
     end
+  end
+
+  defp classify_structured_error({:pi_command_not_found, _command}) do
+    {:permanent, "command_not_found", "The Pi command is not found or not executable; check pi.command in WORKFLOW.md"}
+  end
+
+  defp classify_structured_error({:relative_pi_command_not_supported, _command}) do
+    {:permanent, "invalid_config", "Set pi.command to `pi` or an absolute path"}
   end
 
   defp classify_structured_error({:port_exit, status}) when is_integer(status) do

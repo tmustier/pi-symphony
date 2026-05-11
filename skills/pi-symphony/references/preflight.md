@@ -20,6 +20,7 @@ Run through this before every symphony launch.
 - [ ] `pr.repo_slug` matches the GitHub repo (`Owner/repo`)
 - [ ] `agent.max_concurrent_agents` is set appropriately
 - [ ] `pi.model` and `pi.thinking_level` are what you want
+- [ ] `pi.command` is either `pi` (Symphony will resolve the newest Pi on the orchestrator PATH) or an absolute path to the exact Pi install you want; do not use relative path-like commands such as `./bin/pi`
 - [ ] `workspace.root` directory exists
 - [ ] Extension paths in `pi.extension_paths` resolve correctly relative to WORKFLOW.md
 
@@ -31,6 +32,7 @@ Run through this before every symphony launch.
   ```
 - [ ] `gh` CLI is authenticated: `gh auth status`
 - [ ] `pi` is available: `which pi && pi --version`
+  - If multiple Pi installs exist, run `mix symphony.preflight`; it reports the exact Pi executable/version workers will use.
 - [ ] Symphony escript is built:
   ```bash
   cd ~/.pi/agent/git/github.com/tmustier/pi-symphony/orchestrator/elixir

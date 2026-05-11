@@ -45,7 +45,7 @@ Worker process configuration.
 
 | Field | Default | Description |
 |---|---|---|
-| `command` | `pi` | Path to the pi binary. Use absolute path if pi isn't in PATH. |
+| `command` | `pi` | Pi executable. A bare `pi` is resolved before worker launch to the newest Pi binary visible on the orchestrator PATH, avoiding stale login-shell PATH resolution. Use an absolute path to force a specific install; relative path-like commands are rejected to avoid cwd ambiguity. |
 | `response_timeout_ms` | 60000 | Timeout waiting for a Pi RPC response. |
 | `session_dir_name` | `.pi-rpc-sessions` | Subdirectory name for Pi session files within the workspace. |
 | `model.provider` | — | Model provider (e.g. `anthropic`, `openai-codex`). |

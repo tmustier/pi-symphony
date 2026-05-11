@@ -31,6 +31,8 @@ codex:
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
 pi:
+  # Bare `pi` is resolved by Symphony to the newest Pi binary on the orchestrator PATH
+  # before workers enter `bash -lc`. Use an absolute path to force a specific install.
   command: pi
   response_timeout_ms: 60000
   session_dir_name: .pi-rpc-sessions

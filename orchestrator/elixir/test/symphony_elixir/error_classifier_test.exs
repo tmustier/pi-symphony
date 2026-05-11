@@ -118,6 +118,24 @@ defmodule SymphonyElixir.Orchestrator.ErrorClassifierTest do
       assert result.retryable == false
     end
 
+    test "classifies missing Pi command as permanent" do
+      result = ErrorClassifier.classify({:pi_command_not_found, "pi"})
+
+      assert result.classification == :permanent
+      assert result.category == "command_not_found"
+      assert result.retryable == false
+      assert result.recovery_hint =~ "pi.command"
+    end
+
+    test "classifies relative Pi command as permanent invalid config" do
+      result = ErrorClassifier.classify({:relative_pi_command_not_supported, "./bin/pi"})
+
+      assert result.classification == :permanent
+      assert result.category == "invalid_config"
+      assert result.retryable == false
+      assert result.recovery_hint =~ "absolute path"
+    end
+
     test "classifies port exit 127 (command not found) as permanent" do
       result = ErrorClassifier.classify({:port_exit, 127})
 

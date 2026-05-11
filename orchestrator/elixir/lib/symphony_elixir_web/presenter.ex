@@ -62,7 +62,14 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @spec transcript_payload(String.t(), GenServer.name(), timeout()) ::
           {:ok, map()}
-          | {:error, :issue_not_found | :no_session_file | :snapshot_timeout | :snapshot_unavailable | :unsafe_path | :not_regular_file | :read_failed}
+          | {:error,
+             :issue_not_found
+             | :no_session_file
+             | :snapshot_timeout
+             | :snapshot_unavailable
+             | :unsafe_path
+             | :not_regular_file
+             | :read_failed}
   def transcript_payload(issue_identifier, orchestrator, snapshot_timeout_ms) when is_binary(issue_identifier) do
     with {:ok, run} <- RunSnapshot.lookup_run(issue_identifier, orchestrator, snapshot_timeout_ms),
          {:ok, artifact} <- ArtifactReader.read(run, %{"kind" => "session"}) do

@@ -7,9 +7,12 @@ defmodule SymphonyElixir.Observability.PhaseTransition do
 
   @tracked_change_keys [:phase, :waiting_reason, :next_intended_action, :state, :dispatch_allowed, :passive_phase]
 
-  @spec transitions_from_tracked_update(map(), map(), keyword()) :: [map()]
-  def transitions_from_tracked_update(previous_tracked, current_tracked, opts \\ [])
+  @spec transitions_from_tracked_update(map(), map()) :: [map()]
+  def transitions_from_tracked_update(previous_tracked, current_tracked) do
+    transitions_from_tracked_update(previous_tracked, current_tracked, [])
+  end
 
+  @spec transitions_from_tracked_update(map(), map(), keyword()) :: [map()]
   def transitions_from_tracked_update(previous_tracked, current_tracked, opts)
       when is_map(previous_tracked) and is_map(current_tracked) do
     at = Keyword.get(opts, :at, DateTime.utc_now() |> DateTime.truncate(:second))
@@ -28,10 +31,12 @@ defmodule SymphonyElixir.Observability.PhaseTransition do
   def transition_for(issue_id, previous_entry, current_entry, at, source)
       when is_binary(issue_id) and is_map(previous_entry) and is_map(current_entry) do
     if changed?(previous_entry, current_entry) do
+      issue_identifier = fetch_value(current_entry, :issue_identifier) || fetch_value(previous_entry, :issue_identifier)
+
       [
         %{
           issue_id: issue_id,
-          issue_identifier: fetch_value(current_entry, :issue_identifier) || fetch_value(previous_entry, :issue_identifier),
+          issue_identifier: issue_identifier,
           at: at,
           from: fetch_value(previous_entry, :phase),
           to: fetch_value(current_entry, :phase),

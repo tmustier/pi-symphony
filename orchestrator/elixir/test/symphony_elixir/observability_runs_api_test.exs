@@ -184,7 +184,10 @@ defmodule SymphonyElixir.ObservabilityRunsApiTest do
     File.write!(Path.join(workspace, "dirty.txt"), "dirty")
 
     orchestrator_name = Module.concat(__MODULE__, :RunsWorkspaceOrchestrator)
-    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: phase_two_snapshot(%{workspace_path: workspace})})
+    snapshot = phase_two_snapshot(%{workspace_path: workspace})
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     payload =
@@ -209,7 +212,10 @@ defmodule SymphonyElixir.ObservabilityRunsApiTest do
     git!(outside_workspace, ["checkout", "-b", "outside-branch"])
 
     orchestrator_name = Module.concat(__MODULE__, :RunsWorkspaceOutsideRootOrchestrator)
-    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: phase_two_snapshot(%{workspace_path: outside_workspace})})
+    snapshot = phase_two_snapshot(%{workspace_path: outside_workspace})
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     payload =
@@ -225,13 +231,21 @@ defmodule SymphonyElixir.ObservabilityRunsApiTest do
   end
 
   test "GET /api/v1/runs/:issue_identifier/workspace does not follow workspace symlinks outside root" do
-    outside_workspace = Path.join(System.tmp_dir!(), "symphony-outside-symlink-workspace-#{System.unique_integer([:positive])}")
+    outside_workspace =
+      Path.join(System.tmp_dir!(), "symphony-outside-symlink-workspace-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(outside_workspace)
-    symlink_path = Path.join(Config.settings!().workspace.root, "MT-ACTIVE-symlink-#{System.unique_integer([:positive])}")
+
+    symlink_path =
+      Path.join(Config.settings!().workspace.root, "MT-ACTIVE-symlink-#{System.unique_integer([:positive])}")
+
     File.ln_s!(outside_workspace, symlink_path)
 
     orchestrator_name = Module.concat(__MODULE__, :RunsWorkspaceSymlinkOutsideRootOrchestrator)
-    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: phase_two_snapshot(%{workspace_path: symlink_path})})
+    snapshot = phase_two_snapshot(%{workspace_path: symlink_path})
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     payload =
@@ -246,13 +260,21 @@ defmodule SymphonyElixir.ObservabilityRunsApiTest do
   end
 
   test "GET /api/v1/runs/:issue_identifier/workspace fails closed for long symlink chains" do
-    outside_workspace = Path.join(System.tmp_dir!(), "symphony-outside-long-symlink-workspace-#{System.unique_integer([:positive])}")
+    outside_workspace =
+      Path.join(System.tmp_dir!(), "symphony-outside-long-symlink-workspace-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(outside_workspace)
-    symlink_root = Path.join(Config.settings!().workspace.root, "MT-ACTIVE-long-symlink-#{System.unique_integer([:positive])}")
+
+    symlink_root =
+      Path.join(Config.settings!().workspace.root, "MT-ACTIVE-long-symlink-#{System.unique_integer([:positive])}")
+
     symlink_path = create_symlink_chain!(symlink_root, outside_workspace, 25)
 
     orchestrator_name = Module.concat(__MODULE__, :RunsWorkspaceLongSymlinkOutsideRootOrchestrator)
-    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: phase_two_snapshot(%{workspace_path: symlink_path})})
+    snapshot = phase_two_snapshot(%{workspace_path: symlink_path})
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     payload =
@@ -496,10 +518,7 @@ defmodule SymphonyElixir.ObservabilityRunsApiTest do
   test "legacy GET /api/v1/transcript/:issue_identifier preserves the legacy 500-entry cap" do
     artifacts = write_artifacts!()
 
-    many_lines =
-      1..600
-      |> Enum.map(&Jason.encode!(%{event: "line", n: &1}))
-      |> Enum.join("\n")
+    many_lines = Enum.map_join(1..600, "\n", &Jason.encode!(%{event: "line", n: &1}))
 
     File.write!(artifacts.session_file, many_lines <> "\n")
 
@@ -518,16 +537,26 @@ defmodule SymphonyElixir.ObservabilityRunsApiTest do
 
   test "legacy GET /api/v1/transcript/:issue_identifier does not infer session files from session_dir" do
     artifacts = write_artifacts!()
-    File.write!(Path.join(artifacts.session_dir, "zzzz-untracked.jsonl"), Jason.encode!(%{event: "untracked"}) <> "\n")
+
+    File.write!(
+      Path.join(artifacts.session_dir, "zzzz-untracked.jsonl"),
+      Jason.encode!(%{event: "untracked"}) <> "\n"
+    )
+
     artifacts_without_session_file = Map.delete(artifacts, :session_file)
 
     orchestrator_name = Module.concat(__MODULE__, :RunsTranscriptNoSessionFallbackOrchestrator)
-    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: phase_two_snapshot(artifacts_without_session_file)})
+    snapshot = phase_two_snapshot(artifacts_without_session_file)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     assert build_conn()
            |> get("/api/v1/transcript/MT-ACTIVE")
-           |> json_response(404) == %{"error" => %{"code" => "no_session_file", "message" => "No session file available for this issue"}}
+           |> json_response(404) == %{
+             "error" => %{"code" => "no_session_file", "message" => "No session file available for this issue"}
+           }
   end
 
   test "legacy GET /api/v1/transcript/:issue_identifier rejects symlinks that escape allowed roots" do
@@ -618,7 +647,10 @@ defmodule SymphonyElixir.ObservabilityRunsApiTest do
     artifacts_without_session_file = Map.delete(artifacts, :session_file)
 
     orchestrator_name = Module.concat(__MODULE__, :RunsLogsNoSessionFallbackOrchestrator)
-    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: phase_two_snapshot(artifacts_without_session_file)})
+    snapshot = phase_two_snapshot(artifacts_without_session_file)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     assert build_conn()

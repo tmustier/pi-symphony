@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Symphony.Preflight do
   use Mix.Task
 
+  alias SymphonyElixir.Pi.CommandResolver
+
   @moduledoc """
   Validates workflow config, tooling prerequisites, and extension availability
   before enabling Symphony automation.
@@ -22,6 +24,7 @@ defmodule Mix.Tasks.Symphony.Preflight do
     results =
       [
         check_workflow_config(),
+        check_pi_command(),
         check_model_config(),
         check_gh_cli(),
         check_extension_paths(),
@@ -86,6 +89,25 @@ defmodule Mix.Tasks.Symphony.Preflight do
     "claude-3-haiku-20240307" => "claude-3-haiku is superseded by claude-haiku-4"
   }
 
+  defp check_pi_command do
+    case SymphonyElixir.Config.settings() do
+      {:ok, %{worker: %{runtime: "pi"}} = settings} -> check_pi_runtime_command(settings)
+      {:ok, _settings} -> {:info, "Pi command", "not required for current worker runtime"}
+      {:error, _reason} -> {:warn, "Pi command", "cannot check — workflow config is invalid"}
+    end
+  end
+
+  defp check_pi_runtime_command(settings) do
+    case CommandResolver.resolve_info(settings.pi.command) do
+      {:ok, %{path: path, version: version, resolution: resolution}} ->
+        version_detail = if version, do: "version #{version}", else: "version unknown"
+        {:pass, "Pi command", "#{path} (#{version_detail}, #{format_resolution(resolution)})"}
+
+      {:error, reason} ->
+        {:fail, "Pi command", format_command_resolution_error(reason)}
+    end
+  end
+
   defp check_model_config do
     case SymphonyElixir.Config.settings() do
       {:ok, settings} ->
@@ -129,14 +151,12 @@ defmodule Mix.Tasks.Symphony.Preflight do
   end
 
   defp validate_model_availability(pi_command, model_display) do
-    command = pi_command || "pi"
-
-    case System.find_executable(command) do
-      nil ->
-        {:warn, "Model availability", "cannot validate — #{command} not found in PATH"}
-
-      _path ->
+    case CommandResolver.resolve_info(pi_command) do
+      {:ok, %{path: command}} ->
         validate_model_in_list(command, model_display)
+
+      {:error, reason} ->
+        {:warn, "Model availability", "cannot validate — #{format_command_resolution_error(reason)}"}
     end
   end
 
@@ -154,9 +174,18 @@ defmodule Mix.Tasks.Symphony.Preflight do
     if String.contains?(output, model_display) do
       {:pass, "Model availability", "#{model_display} found in `#{command} --list-models`"}
     else
-      {:fail, "Model availability", "#{model_display} not found in `#{command} --list-models` output — this will cause permanent failures; check pi.model in WORKFLOW.md"}
+      {:fail, "Model availability", "#{model_display} not found in `#{command} --list-models` output — this will cause permanent failures; check pi.command and pi.model in WORKFLOW.md"}
     end
   end
+
+  defp format_resolution(:configured_path), do: "configured path"
+  defp format_resolution(:path_first), do: "PATH"
+  defp format_resolution(:path_latest), do: "latest version on PATH"
+
+  defp format_command_resolution_error({:pi_command_not_found, command}), do: "#{command} not found or not executable"
+
+  defp format_command_resolution_error({:relative_pi_command_not_supported, command}),
+    do: "#{command} is relative; set pi.command to `pi` or an absolute path"
 
   defp check_gh_cli do
     case SymphonyElixir.Config.settings() do
