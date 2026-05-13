@@ -8,9 +8,9 @@ defmodule SymphonyElixir.Pi.RpcClient do
   @get_state_id 1
   @set_session_name_id 2
   @set_auto_retry_id 3
-  @set_auto_compaction_id 4
   @prompt_id 5
   @extension_ui_response_id 6
+  @post_agent_end_state_id 7
   @set_model_id 97
   @set_thinking_level_id 98
   @port_line_bytes 1_048_576
@@ -68,8 +68,7 @@ defmodule SymphonyElixir.Pi.RpcClient do
   @spec configure_turn(session(), map()) :: :ok | {:error, term()}
   def configure_turn(%{port: port, response_timeout_ms: timeout_ms}, %{name: session_name} = turn_config) when is_binary(session_name) do
     with {:ok, _} <- request_response(port, @set_session_name_id, %{"type" => "set_session_name", "name" => session_name}, timeout_ms),
-         {:ok, _} <- request_response(port, @set_auto_retry_id, %{"type" => "set_auto_retry", "enabled" => false}, timeout_ms),
-         {:ok, _} <- request_response(port, @set_auto_compaction_id, %{"type" => "set_auto_compaction", "enabled" => false}, timeout_ms) do
+         {:ok, _} <- request_response(port, @set_auto_retry_id, %{"type" => "set_auto_retry", "enabled" => false}, timeout_ms) do
       resolved_model = Map.get(turn_config, :model)
       resolved_thinking = Map.get(turn_config, :thinking_level)
 
@@ -127,6 +126,11 @@ defmodule SymphonyElixir.Pi.RpcClient do
       {:ok, _} -> {:ok, @prompt_id}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @spec get_state_with_events(session()) :: {:ok, map(), [incoming_message()]} | {:error, term()}
+  def get_state_with_events(%{port: port, response_timeout_ms: timeout_ms}) do
+    request_response_with_events(port, @post_agent_end_state_id, %{"type" => "get_state"}, timeout_ms)
   end
 
   @spec abort(session()) :: :ok | {:error, term()}
@@ -273,6 +277,12 @@ defmodule SymphonyElixir.Pi.RpcClient do
     await_response(port, request_id, timeout_ms)
   end
 
+  defp request_response_with_events(port, request_id, payload, timeout_ms) do
+    payload = Map.put(payload, "id", request_id)
+    send_message(port, payload)
+    await_response_with_events(port, request_id, timeout_ms)
+  end
+
   defp await_response(port, request_id, timeout_ms, pending_line \\ "") do
     receive do
       {^port, {:data, {:eol, chunk}}} ->
@@ -301,6 +311,46 @@ defmodule SymphonyElixir.Pi.RpcClient do
 
       {^port, {:data, {:noeol, chunk}}} ->
         await_response(port, request_id, timeout_ms, pending_line <> to_string(chunk))
+
+      {^port, {:exit_status, status}} ->
+        {:error, {:port_exit, status}}
+    after
+      timeout_ms ->
+        {:error, :response_timeout}
+    end
+  end
+
+  defp await_response_with_events(port, request_id, timeout_ms, pending_line \\ "", events \\ []) do
+    receive do
+      {^port, {:data, {:eol, chunk}}} ->
+        payload_string = pending_line <> to_string(chunk)
+
+        case Jason.decode(payload_string) do
+          {:ok, %{"type" => "response", "id" => ^request_id, "success" => true} = response} ->
+            {:ok, response, Enum.reverse(events)}
+
+          {:ok, %{"type" => "response", "id" => ^request_id, "success" => false, "error" => error}} ->
+            {:error, {:rpc_command_failed, error}}
+
+          {:ok, %{"type" => "response"} = payload} ->
+            await_response_with_events(port, request_id, timeout_ms, "", [{:response, payload} | events])
+
+          {:ok, %{"type" => "extension_ui_request"} = payload} ->
+            auto_cancel_inline(port, payload)
+            await_response_with_events(port, request_id, timeout_ms, "", [{:extension_ui_request, payload} | events])
+
+          {:ok, %{"type" => _type} = payload} ->
+            await_response_with_events(port, request_id, timeout_ms, "", [{:event, payload} | events])
+
+          {:ok, payload} when is_map(payload) ->
+            await_response_with_events(port, request_id, timeout_ms, "", [{:event, payload} | events])
+
+          {:error, _reason} ->
+            await_response_with_events(port, request_id, timeout_ms, "", [{:malformed, payload_string} | events])
+        end
+
+      {^port, {:data, {:noeol, chunk}}} ->
+        await_response_with_events(port, request_id, timeout_ms, pending_line <> to_string(chunk), events)
 
       {^port, {:exit_status, status}} ->
         {:error, {:port_exit, status}}
