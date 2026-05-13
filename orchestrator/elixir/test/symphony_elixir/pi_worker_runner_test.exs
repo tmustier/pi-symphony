@@ -31,19 +31,16 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
               ;;
             3)
-              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
-              ;;
-            4)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_start"}'
               printf '%s\\n' '{"type":"turn_start"}'
               printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":12,"output":4,"totalTokens":16}},"toolResults":[]}'
               printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":12,"output":4,"totalTokens":16}}]}'
               ;;
-            5)
+            4)
               printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
-            6)
+            5)
               printf '%s\\n' '{"type":"response","id":99,"command":"abort","success":true}'
               ;;
           esac
@@ -153,13 +150,10 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
               ;;
             3)
-              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
-              ;;
-            4)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_end","messages":[]}'
               ;;
-            5)
+            4)
               printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
           esac
@@ -245,19 +239,16 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
               ;;
             3)
-              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
-              ;;
-            4)
               printf '%s\\n' '{"type":"response","id":97,"command":"set_model","success":true}'
               ;;
-            5)
+            4)
               printf '%s\\n' '{"type":"response","id":98,"command":"set_thinking_level","success":true}'
               ;;
-            6)
+            5)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_end","messages":[]}'
               ;;
-            7)
+            6)
               printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
           esac
@@ -297,6 +288,7 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
       assert trace =~ ~s("id":98,"level":"xhigh","type":"set_thinking_level")
       assert trace =~ ~s("id":5,"message":)
       assert trace =~ ~s("type":"prompt")
+      refute trace =~ "set_auto_retry"
       refute trace =~ "set_auto_compaction"
     after
       restore_env("SYMP_TEST_PI_TRACE", previous_trace)
@@ -341,30 +333,24 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
               ;;
             3)
-              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
-              ;;
-            4)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_start"}'
               printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":12,"output":4,"totalTokens":16}}}'
               printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":12,"output":4,"totalTokens":16}}]}'
               ;;
-            5)
+            4)
               printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
-            6)
+            5)
               printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
               ;;
-            7)
-              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
-              ;;
-            8)
+            6)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_start"}'
               printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":15,"output":5,"totalTokens":20}}}'
               printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":15,"output":5,"totalTokens":20}}]}'
               ;;
-            9)
+            7)
               printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
           esac
@@ -482,15 +468,12 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
               ;;
             3)
-              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
-              ;;
-            4)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_start"}'
               printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":10,"output":2,"totalTokens":12},"stopReason":"error","errorMessage":"context overflow"}}'
               printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":10,"output":2,"totalTokens":12},"stopReason":"error","errorMessage":"context overflow"}]}'
               ;;
-            5)
+            4)
               sleep 0.2
               printf '%s\\n' '{"type":"compaction_start","reason":"overflow"}'
               printf '%s\\n' '{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":true}'
@@ -528,6 +511,7 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
       assert :ok = WorkerRunner.stop_session(session)
 
       trace = File.read!(trace_file)
+      refute trace =~ "set_auto_retry"
       refute trace =~ "set_auto_compaction"
     after
       restore_env("SYMP_TEST_PI_TRACE", previous_trace)
@@ -572,12 +556,9 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
               ;;
             3)
-              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
-              ;;
-            4)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               ;;
-            5)
+            4)
               printf '%s\\n' '{"type":"response","id":99,"command":"abort","success":true}'
               exit 0
               ;;

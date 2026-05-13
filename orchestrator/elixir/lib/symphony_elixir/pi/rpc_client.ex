@@ -7,7 +7,6 @@ defmodule SymphonyElixir.Pi.RpcClient do
 
   @get_state_id 1
   @set_session_name_id 2
-  @set_auto_retry_id 3
   @prompt_id 5
   @extension_ui_response_id 6
   @post_agent_end_state_id 7
@@ -67,8 +66,7 @@ defmodule SymphonyElixir.Pi.RpcClient do
 
   @spec configure_turn(session(), map()) :: :ok | {:error, term()}
   def configure_turn(%{port: port, response_timeout_ms: timeout_ms}, %{name: session_name} = turn_config) when is_binary(session_name) do
-    with {:ok, _} <- request_response(port, @set_session_name_id, %{"type" => "set_session_name", "name" => session_name}, timeout_ms),
-         {:ok, _} <- request_response(port, @set_auto_retry_id, %{"type" => "set_auto_retry", "enabled" => false}, timeout_ms) do
+    with {:ok, _} <- request_response(port, @set_session_name_id, %{"type" => "set_session_name", "name" => session_name}, timeout_ms) do
       resolved_model = Map.get(turn_config, :model)
       resolved_thinking = Map.get(turn_config, :thinking_level)
 
