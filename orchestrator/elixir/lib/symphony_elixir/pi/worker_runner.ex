@@ -78,7 +78,8 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
         )
 
       {:ok, {:event, %{"type" => "agent_end"} = payload}, _next_pending_line} ->
-        handle_agent_end(session, payload, turn_session_id, on_message, issue)
+        ctx = completion_context(turn_session_id, on_message, issue, timeout_ms, started_at, heartbeat_ms)
+        handle_agent_end(session, payload, ctx)
 
       {:ok, {:event, payload}, next_pending_line} ->
         emit(
@@ -133,18 +134,225 @@ defmodule SymphonyElixir.Pi.WorkerRunner do
     emit(on_message, EventMapper.extension_ui_request(payload, Jason.encode!(payload), turn_session_id, session.metadata))
   end
 
-  defp handle_agent_end(session, payload, turn_session_id, on_message, issue) do
-    emit(on_message, EventMapper.rpc_event(payload, Jason.encode!(payload), turn_session_id, session.metadata))
+  # Pi can emit auto-compaction events immediately after `agent_end`. If an overflow
+  # compaction reports `willRetry: true`, the prompt is still in progress and a later
+  # `agent_end` is the real turn boundary. Keep compaction enabled by default without
+  # letting the orchestrator race the next turn.
+  defp handle_agent_end(session, payload, ctx) do
+    emit_rpc_event(session, ctx, payload)
 
-    Logger.info("Pi worker turn completed for #{issue_context(issue)} session_id=#{turn_session_id} session_file=#{inspect(session.session_file)}")
+    case settle_post_agent_end(session, ctx) do
+      {:complete, final_payload} ->
+        Logger.info(
+          "Pi worker turn completed for #{issue_context(ctx.issue)} " <>
+            "session_id=#{ctx.turn_session_id} session_file=#{inspect(session.session_file)}"
+        )
 
-    {:ok,
-     %{
-       result: payload,
-       session_id: turn_session_id,
-       base_session_id: session.base_session_id,
-       session_file: session.session_file
-     }}
+        {:ok,
+         %{
+           result: final_payload || payload,
+           session_id: ctx.turn_session_id,
+           base_session_id: session.base_session_id,
+           session_file: session.session_file
+         }}
+
+      {:retry, next_pending_line} ->
+        Logger.info(
+          "Pi worker auto-compaction requested retry for #{issue_context(ctx.issue)} " <>
+            "session_id=#{ctx.turn_session_id}"
+        )
+
+        continue_receive_loop(session, ctx, next_pending_line)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp settle_post_agent_end(session, ctx) do
+    case RpcClient.get_state_with_events(session) do
+      {:ok, response, events} ->
+        Enum.each(events, &emit_post_agent_end_message(session, ctx, &1))
+
+        events
+        |> buffered_post_agent_end_lifecycle()
+        |> settle_buffered_lifecycle(response, session, ctx)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp settle_buffered_lifecycle(%{final_agent_end: final_agent_end}, response, session, ctx)
+       when not is_nil(final_agent_end) do
+    settle_final_agent_end(final_agent_end, response, session, ctx)
+  end
+
+  defp settle_buffered_lifecycle(%{retry_requested: true}, _response, _session, _ctx), do: {:retry, ""}
+
+  defp settle_buffered_lifecycle(_lifecycle, response, session, ctx) do
+    settle_current_state(response, session, ctx)
+  end
+
+  defp settle_final_agent_end(final_agent_end, response, session, ctx) do
+    cond do
+      state_compacting?(response) ->
+        await_compaction_end_preserving_final(session, ctx, final_agent_end)
+
+      state_streaming?(response) ->
+        {:retry, ""}
+
+      true ->
+        {:complete, final_agent_end}
+    end
+  end
+
+  defp settle_current_state(response, session, ctx) do
+    cond do
+      state_compacting?(response) ->
+        await_compaction_end(session, ctx, "")
+
+      state_streaming?(response) ->
+        {:retry, ""}
+
+      true ->
+        {:complete, nil}
+    end
+  end
+
+  defp emit_post_agent_end_message(session, ctx, {:event, payload}) do
+    emit_rpc_event(session, ctx, payload)
+  end
+
+  defp emit_post_agent_end_message(session, ctx, {:extension_ui_request, payload}) do
+    emit(
+      ctx.on_message,
+      EventMapper.extension_ui_request(
+        payload,
+        Jason.encode!(payload),
+        ctx.turn_session_id,
+        session.metadata
+      )
+    )
+  end
+
+  defp emit_post_agent_end_message(session, ctx, {:malformed, raw}) do
+    emit(ctx.on_message, EventMapper.malformed(raw, ctx.turn_session_id, session.metadata))
+  end
+
+  defp emit_post_agent_end_message(session, ctx, {:response, _response}) do
+    emit(ctx.on_message, EventMapper.heartbeat(ctx.turn_session_id, session.metadata))
+  end
+
+  defp buffered_post_agent_end_lifecycle(events) do
+    Enum.reduce(events, %{retry_requested: false, final_agent_end: nil}, fn
+      {:event, %{"type" => "compaction_end", "willRetry" => true}}, _state ->
+        %{retry_requested: true, final_agent_end: nil}
+
+      {:event, %{"type" => "agent_end"} = payload}, %{retry_requested: true} ->
+        %{retry_requested: false, final_agent_end: payload}
+
+      {:event, %{"type" => "agent_end"} = payload}, state ->
+        %{state | final_agent_end: payload}
+
+      _message, state ->
+        state
+    end)
+  end
+
+  defp await_compaction_end_preserving_final(session, ctx, final_agent_end) do
+    case await_compaction_end(session, ctx, "") do
+      {:complete, nil} -> {:complete, final_agent_end}
+      other -> other
+    end
+  end
+
+  defp state_compacting?(%{"data" => %{"isCompacting" => true}}), do: true
+  defp state_compacting?(_response), do: false
+
+  defp state_streaming?(%{"data" => %{"isStreaming" => true}}), do: true
+  defp state_streaming?(_response), do: false
+
+  defp await_compaction_end(session, ctx, pending_line) do
+    case RpcClient.receive_message(session, ctx.heartbeat_ms, pending_line) do
+      {:ok, {:event, %{"type" => "compaction_end"} = payload}, next_pending_line} ->
+        handle_compaction_end(payload, next_pending_line, ctx, session)
+
+      {:ok, {:event, payload}, next_pending_line} ->
+        emit_rpc_event(session, ctx, payload)
+        await_compaction_end(session, ctx, next_pending_line)
+
+      {:ok, {:extension_ui_request, payload}, next_pending_line} ->
+        handle_extension_ui_request(session, payload, ctx.turn_session_id, ctx.on_message)
+        await_compaction_end(session, ctx, next_pending_line)
+
+      {:ok, {:malformed, raw}, next_pending_line} ->
+        emit(ctx.on_message, EventMapper.malformed(raw, ctx.turn_session_id, session.metadata))
+        await_compaction_end(session, ctx, next_pending_line)
+
+      {:ok, {:response, _response}, next_pending_line} ->
+        emit(ctx.on_message, EventMapper.heartbeat(ctx.turn_session_id, session.metadata))
+        await_compaction_end(session, ctx, next_pending_line)
+
+      {:error, :timeout} ->
+        handle_compaction_heartbeat_timeout(session, ctx, pending_line)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp handle_compaction_heartbeat_timeout(session, ctx, pending_line) do
+    elapsed = System.monotonic_time(:millisecond) - ctx.started_at
+
+    if port_alive?(session) and elapsed < ctx.timeout_ms do
+      emit(ctx.on_message, EventMapper.heartbeat(ctx.turn_session_id, session.metadata))
+      await_compaction_end(session, ctx, pending_line)
+    else
+      :ok = maybe_abort(session)
+      {:error, :turn_timeout}
+    end
+  end
+
+  defp handle_compaction_end(payload, next_pending_line, ctx, session) do
+    emit_rpc_event(session, ctx, payload)
+
+    if Map.get(payload, "willRetry") == true do
+      {:retry, next_pending_line}
+    else
+      {:complete, nil}
+    end
+  end
+
+  defp emit_rpc_event(session, ctx, payload) do
+    emit(
+      ctx.on_message,
+      EventMapper.rpc_event(payload, Jason.encode!(payload), ctx.turn_session_id, session.metadata)
+    )
+  end
+
+  defp continue_receive_loop(session, ctx, pending_line) do
+    receive_loop(
+      session,
+      ctx.turn_session_id,
+      ctx.on_message,
+      ctx.issue,
+      ctx.timeout_ms,
+      pending_line,
+      ctx.started_at,
+      ctx.heartbeat_ms
+    )
+  end
+
+  defp completion_context(turn_session_id, on_message, issue, timeout_ms, started_at, heartbeat_ms) do
+    %{
+      turn_session_id: turn_session_id,
+      on_message: on_message,
+      issue: issue,
+      timeout_ms: timeout_ms,
+      started_at: started_at,
+      heartbeat_ms: heartbeat_ms
+    }
   end
 
   defp handle_heartbeat_timeout(session, turn_session_id, on_message, issue, timeout_ms, pending_line, started_at, heartbeat_ms) do

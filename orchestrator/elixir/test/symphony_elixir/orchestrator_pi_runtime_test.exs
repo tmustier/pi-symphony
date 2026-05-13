@@ -39,13 +39,13 @@ defmodule SymphonyElixir.OrchestratorPiRuntimeTest do
               printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
               ;;
             4)
-              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
-              ;;
-            5)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_start"}'
               sleep 2
               printf '%s\\n' '{"type":"agent_end","messages":[]}'
+              ;;
+            5)
+              printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               exit 0
               ;;
           esac

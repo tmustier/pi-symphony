@@ -34,14 +34,14 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
               ;;
             4)
-              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
-              ;;
-            5)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_start"}'
               printf '%s\\n' '{"type":"turn_start"}'
               printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":12,"output":4,"totalTokens":16}},"toolResults":[]}'
               printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":12,"output":4,"totalTokens":16}}]}'
+              ;;
+            5)
+              printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
             6)
               printf '%s\\n' '{"type":"response","id":99,"command":"abort","success":true}'
@@ -156,11 +156,11 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
               ;;
             4)
-              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
-              ;;
-            5)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_end","messages":[]}'
+              ;;
+            5)
+              printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
           esac
         done
@@ -248,17 +248,17 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
               ;;
             4)
-              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
-              ;;
-            5)
               printf '%s\\n' '{"type":"response","id":97,"command":"set_model","success":true}'
               ;;
-            6)
+            5)
               printf '%s\\n' '{"type":"response","id":98,"command":"set_thinking_level","success":true}'
               ;;
-            7)
+            6)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_end","messages":[]}'
+              ;;
+            7)
+              printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
           esac
         done
@@ -297,6 +297,7 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
       assert trace =~ ~s("id":98,"level":"xhigh","type":"set_thinking_level")
       assert trace =~ ~s("id":5,"message":)
       assert trace =~ ~s("type":"prompt")
+      refute trace =~ "set_auto_compaction"
     after
       restore_env("SYMP_TEST_PI_TRACE", previous_trace)
       File.rm_rf(test_root)
@@ -343,13 +344,13 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
               ;;
             4)
-              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
-              ;;
-            5)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_start"}'
               printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":12,"output":4,"totalTokens":16}}}'
               printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":12,"output":4,"totalTokens":16}}]}'
+              ;;
+            5)
+              printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
             6)
               printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
@@ -358,13 +359,13 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
               ;;
             8)
-              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
-              ;;
-            9)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               printf '%s\\n' '{"type":"agent_start"}'
               printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":15,"output":5,"totalTokens":20}}}'
               printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":15,"output":5,"totalTokens":20}}]}'
+              ;;
+            9)
+              printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
               ;;
           esac
         done
@@ -444,6 +445,96 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
     end
   end
 
+  test "pi worker runner waits for auto-compaction retry before completing the turn" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-pi-worker-compaction-retry-#{System.unique_integer([:positive])}"
+      )
+
+    previous_trace = System.get_env("SYMP_TEST_PI_TRACE")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "PI-248")
+      fake_pi = Path.join(test_root, "fake-pi")
+      trace_file = Path.join(test_root, "pi.trace")
+
+      File.mkdir_p!(workspace)
+      System.put_env("SYMP_TEST_PI_TRACE", trace_file)
+
+      File.write!(
+        fake_pi,
+        """
+        #!/bin/sh
+        trace_file="${SYMP_TEST_PI_TRACE:-/tmp/pi.trace}"
+        count=0
+
+        while IFS= read -r line; do
+          count=$((count + 1))
+          printf 'JSON:%s\\n' "$line" >> "$trace_file"
+
+          case "$count" in
+            1)
+              printf '%s\\n' '{"type":"response","id":1,"command":"get_state","success":true,"data":{"sessionId":"pi-session-compact","sessionFile":"/tmp/pi-session-compact.jsonl"}}'
+              ;;
+            2)
+              printf '%s\\n' '{"type":"response","id":2,"command":"set_session_name","success":true}'
+              ;;
+            3)
+              printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
+              ;;
+            4)
+              printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
+              printf '%s\\n' '{"type":"agent_start"}'
+              printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":10,"output":2,"totalTokens":12},"stopReason":"error","errorMessage":"context overflow"}}'
+              printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":10,"output":2,"totalTokens":12},"stopReason":"error","errorMessage":"context overflow"}]}'
+              ;;
+            5)
+              sleep 0.2
+              printf '%s\\n' '{"type":"compaction_start","reason":"overflow"}'
+              printf '%s\\n' '{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":true}'
+              printf '%s\\n' '{"type":"agent_start"}'
+              printf '%s\\n' '{"type":"turn_end","message":{"role":"assistant","usage":{"input":20,"output":5,"totalTokens":25}}}'
+              printf '%s\\n' '{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":20,"output":5,"totalTokens":25}}]}'
+              printf '%s\\n' '{"type":"response","id":7,"command":"get_state","success":true,"data":{"isStreaming":false,"isCompacting":false}}'
+              ;;
+          esac
+        done
+        """
+      )
+
+      File.chmod!(fake_pi, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_runtime: "pi",
+        pi_command: fake_pi,
+        pi_response_timeout_ms: 1_000,
+        codex_turn_timeout_ms: 1_000
+      )
+
+      issue = %Issue{
+        id: "issue-pi-compaction-retry",
+        identifier: "PI-248",
+        title: "Retry after compaction",
+        description: "Prompt should not complete on the pre-retry agent_end",
+        state: "In Progress",
+        labels: []
+      }
+
+      assert {:ok, session} = WorkerRunner.start_session(workspace)
+      assert {:ok, %{result: %{"messages" => [%{"usage" => %{"input" => 20}}]}}} = WorkerRunner.run_turn(session, "Overflow then retry", issue)
+      assert :ok = WorkerRunner.stop_session(session)
+
+      trace = File.read!(trace_file)
+      refute trace =~ "set_auto_compaction"
+    after
+      restore_env("SYMP_TEST_PI_TRACE", previous_trace)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "pi worker runner aborts the active turn when it times out" do
     test_root =
       Path.join(
@@ -484,12 +575,9 @@ defmodule SymphonyElixir.PiWorkerRunnerTest do
               printf '%s\\n' '{"type":"response","id":3,"command":"set_auto_retry","success":true}'
               ;;
             4)
-              printf '%s\\n' '{"type":"response","id":4,"command":"set_auto_compaction","success":true}'
-              ;;
-            5)
               printf '%s\\n' '{"type":"response","id":5,"command":"prompt","success":true}'
               ;;
-            6)
+            5)
               printf '%s\\n' '{"type":"response","id":99,"command":"abort","success":true}'
               exit 0
               ;;

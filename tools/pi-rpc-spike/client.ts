@@ -65,6 +65,8 @@ export class PiRpcClient {
   private readonly collector = new SpikeRunCollector();
   private agentEndPromise?: Promise<void>;
   private resolveAgentEnd?: () => void;
+  private agentEndSequence = 0;
+  private compactionRetryAfterAgentEndSequence = 0;
   private exitPromise?: Promise<void>;
   private resolveExited?: () => void;
 
@@ -157,7 +159,6 @@ export class PiRpcClient {
     try {
       await this.request({ type: "set_session_name", name: sessionName });
       await this.request({ type: "set_auto_retry", enabled: false });
-      await this.request({ type: "set_auto_compaction", enabled: false });
 
       if (model) {
         await this.request({
@@ -316,13 +317,52 @@ export class PiRpcClient {
     if (isRpcEventEnvelope(parsed)) {
       this.collector.recordEvent(parsed);
       this.onEvent?.(parsed);
-      if (parsed.type === "agent_end") {
-        this.resolveAgentEnd?.();
-      }
+      this.handleLifecycleEvent(parsed);
       return;
     }
 
     this.collector.recordStderr(`Unknown protocol message: ${JSON.stringify(parsed)}`);
+  }
+
+  private handleLifecycleEvent(event: RpcEventEnvelope): void {
+    if (event.type === "compaction_end" && event.willRetry === true) {
+      this.compactionRetryAfterAgentEndSequence = this.agentEndSequence;
+      return;
+    }
+
+    if (event.type !== "agent_end") {
+      return;
+    }
+
+    const sequence = ++this.agentEndSequence;
+    void this.settleAgentEnd(sequence).catch((error) => {
+      this.collector.recordStderr(
+        `Failed to settle agent_end: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      this.resolveAgentEnd?.();
+    });
+  }
+
+  private async settleAgentEnd(sequence: number): Promise<void> {
+    while (true) {
+      const state = await this.request({ type: "get_state" });
+
+      if (this.compactionRetryAfterAgentEndSequence >= sequence) {
+        return;
+      }
+
+      if (isActiveRpcState(state)) {
+        await delay(100);
+        continue;
+      }
+
+      if (this.compactionRetryAfterAgentEndSequence >= sequence) {
+        return;
+      }
+
+      this.resolveAgentEnd?.();
+      return;
+    }
   }
 
   private rejectAllPending(reason: unknown): void {
@@ -341,6 +381,19 @@ function waitFor(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
       setTimeout(() => resolve(false), timeoutMs);
     }),
   ]);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isActiveRpcState(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (("isStreaming" in value && value.isStreaming === true) ||
+      ("isCompacting" in value && value.isCompacting === true))
+  );
 }
 
 export function renderFixturePrompt(issue: FixtureIssue): string {

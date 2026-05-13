@@ -62,7 +62,6 @@ The worker runner does not need the full Pi RPC surface.
 - `get_state`
 - `set_session_name`
 - `set_auto_retry`
-- `set_auto_compaction`
 - `prompt`
 - `abort`
 
@@ -91,8 +90,7 @@ The worker runner does not need the full Pi RPC surface.
 3. Set a readable session name such as `<issue.identifier>: <issue.title>`.
 4. Disable Pi-managed retries:
    - `set_auto_retry { enabled: false }`
-5. Disable Pi-managed compaction for the initial spike:
-   - `set_auto_compaction { enabled: false }`
+5. Leave Pi-managed auto-compaction under the operator/session's normal Pi policy. Workers must not send `set_auto_compaction { enabled: false }` as default setup because Pi persists that RPC toggle to shared settings in current releases.
 6. If configured in `WORKFLOW.md`, set the worker model:
    - `set_model { provider, modelId }`
 7. If configured in `WORKFLOW.md`, set the worker thinking level:
@@ -101,7 +99,8 @@ The worker runner does not need the full Pi RPC surface.
 Rationale:
 
 - the orchestrator should remain the single authority for retries
-- compaction can be reintroduced later once multi-turn Pi worker behavior is stable
+- workers must not globally disable the operator's auto-compaction setting
+- the worker runner tolerates post-`agent_end` compaction events and only treats the turn as complete after a threshold compaction ends or after an overflow compaction's retry produces a later `agent_end`
 
 ### 4.2 Run
 
@@ -255,6 +254,6 @@ It does **not** need to prove full orchestrator integration yet.
 Questions intentionally deferred past the spike:
 
 - whether workers should ever use `follow_up` or `steer`
-- whether auto-compaction should be re-enabled for long-running multi-turn sessions
+- whether `set_auto_retry { enabled: false }` should also become session-local or move behind an isolated worker config directory once Pi exposes non-persistent RPC toggles
 - whether the final implementation should keep a raw stdio client in Elixir only, or also keep a reusable TS harness for local debugging
 - how Pi-side tracker mutation should be injected: extension, bridge, or other runtime surface
