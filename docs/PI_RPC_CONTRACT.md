@@ -61,7 +61,6 @@ The worker runner does not need the full Pi RPC surface.
 
 - `get_state`
 - `set_session_name`
-- `set_auto_retry`
 - `prompt`
 - `abort`
 
@@ -88,18 +87,15 @@ The worker runner does not need the full Pi RPC surface.
 1. Spawn Pi in RPC mode in the issue workspace with an explicit issue-scoped session directory.
 2. Verify protocol responsiveness with `get_state`.
 3. Set a readable session name such as `<issue.identifier>: <issue.title>`.
-4. Disable Pi-managed retries:
-   - `set_auto_retry { enabled: false }`
-5. Leave Pi-managed auto-compaction under the operator/session's normal Pi policy. Workers must not send `set_auto_compaction { enabled: false }` as default setup because Pi persists that RPC toggle to shared settings in current releases.
-6. If configured in `WORKFLOW.md`, set the worker model:
+4. Leave Pi-managed auto-retry and auto-compaction under the operator/session's normal Pi policy. Workers must not send `set_auto_retry { enabled: false }` or `set_auto_compaction { enabled: false }` as default setup because Pi persists those RPC toggles to shared settings in current releases.
+5. If configured in `WORKFLOW.md`, set the worker model:
    - `set_model { provider, modelId }`
-7. If configured in `WORKFLOW.md`, set the worker thinking level:
+6. If configured in `WORKFLOW.md`, set the worker thinking level:
    - `set_thinking_level { level }`
 
 Rationale:
 
-- the orchestrator should remain the single authority for retries
-- workers must not globally disable the operator's auto-compaction setting
+- workers must not globally disable the operator's auto-retry or auto-compaction settings
 - the worker runner tolerates post-`agent_end` compaction events and only treats the turn as complete after a threshold compaction ends or after an overflow compaction's retry produces a later `agent_end`
 
 ### 4.2 Run
@@ -254,6 +250,5 @@ It does **not** need to prove full orchestrator integration yet.
 Questions intentionally deferred past the spike:
 
 - whether workers should ever use `follow_up` or `steer`
-- whether `set_auto_retry { enabled: false }` should also become session-local or move behind an isolated worker config directory once Pi exposes non-persistent RPC toggles
 - whether the final implementation should keep a raw stdio client in Elixir only, or also keep a reusable TS harness for local debugging
 - how Pi-side tracker mutation should be injected: extension, bridge, or other runtime surface

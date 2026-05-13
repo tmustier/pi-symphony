@@ -158,7 +158,6 @@ export class PiRpcClient {
 
     try {
       await this.request({ type: "set_session_name", name: sessionName });
-      await this.request({ type: "set_auto_retry", enabled: false });
 
       if (model) {
         await this.request({
